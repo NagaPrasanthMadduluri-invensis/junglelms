@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npm run build --workspace=client",
+  "buildCommand": "cd client && npm run build",
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" }
