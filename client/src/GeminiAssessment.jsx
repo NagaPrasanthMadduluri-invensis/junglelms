@@ -663,8 +663,10 @@ export default function GeminiAssessment() {
 
   // Load shared results
   const loadSharedResults = async () => {
+    setLoadingResults(true);
     const results = await api.getResults();
     setSharedResults(results);
+    setLoadingResults(false);
   };
 
   useEffect(() => {
@@ -1143,7 +1145,9 @@ export default function GeminiAssessment() {
       <p style={styles.bodyText}>
         Results from everyone who has taken the assessment so far. Useful for spotting patterns, and for the moment Bharti, Mihir, and Kalyani see they all landed in different quadrants.
       </p>
-      {sharedResults.length === 0 ? (
+      {loadingResults ? (
+        <p style={{ ...styles.bodyText, color: COLORS.inkMuted }}>Loading results…</p>
+      ) : sharedResults.length === 0 ? (
         <p style={{ ...styles.bodyText, fontStyle: "italic" }}>No-one has finished it yet. Be first.</p>
       ) : (
         <div style={{ marginTop: "20px" }}>
@@ -1152,7 +1156,7 @@ export default function GeminiAssessment() {
             return (
               <div key={r.id || i} style={{
                 display: "grid",
-                gridTemplateColumns: "1fr auto auto",
+                gridTemplateColumns: "1fr auto",
                 gap: "14px",
                 padding: "12px 14px",
                 marginBottom: "8px",
@@ -1169,7 +1173,7 @@ export default function GeminiAssessment() {
                     {r.track === "engineering" ? "Engineering track" : "General track"} · K {r.kPct}% / J {r.jPct}%
                   </div>
                 </div>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: COLORS.jungleeDeep }}>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: COLORS.jungleeDeep, whiteSpace: "nowrap" }}>
                   {td ? td.name : r.trackResult}
                 </div>
               </div>
@@ -1179,6 +1183,7 @@ export default function GeminiAssessment() {
       )}
       <div style={{ marginTop: "24px" }}>
         <button style={styles.secondaryBtn} onClick={() => setStage("start")}>← Back to start</button>
+        <button style={styles.secondaryBtn} onClick={loadSharedResults}>Refresh</button>
       </div>
     </div>
   );
