@@ -3,16 +3,31 @@ const express = require("express");
 const cors = require("cors");
 const db = require("./db");
 const { scoreAttempt, checkCompleteness } = require("./scoring");
+const adminRoutes = require("./admin-routes");
+const { cleanAnswers } = require("./sanitize");
 
 const app = express();
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
-// Ensure schema exists before any request is handled.
-// Promise is created once per process/serverless instance.
-const ready = db.initDB();
-app.use((_req, _res, next) => ready.then(() => next()).catch(next));
+// Ensure the schema exists before any request is handled.
+//
+// Lazily memoised, and cleared on failure. A single transient Turso timeout
+// used to reject this promise before anything attached a handler, which both
+// crashed the process on the unhandled rejection AND meant every later request
+// reused the poisoned promise. Now a failed attempt simply retries next time.
+let ready = null;
+function ensureReady() {
+  if (!ready) {
+    ready = db.initDB().catch((e) => { ready = null; throw e; });
+  }
+  return ready;
+}
+// Kick it off, with a handler attached so a rejection can never go unhandled.
+ensureReady().catch((e) => console.error("initDB failed, will retry on demand:", e.message));
+
+app.use((_req, _res, next) => ensureReady().then(() => next()).catch(next));
 
 // Silence Chrome DevTools auto-probe
 app.get("/.well-known/appspecific/com.chrome.devtools.json", (_req, res) => res.status(204).end());
@@ -22,6 +37,10 @@ app.get("/.well-known/appspecific/com.chrome.devtools.json", (_req, res) => res.
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, ts: Date.now() });
 });
+
+// ---- Admin ------------------------------------------------------
+
+app.use("/api/admin", adminRoutes);
 
 // ---- Reviewer gate ---------------------------------------------
 
@@ -100,20 +119,25 @@ app.delete("/api/session/:id", async (req, res, next) => {
 });
 
 // ---- Attempts --------------------------------------------------
+//
+// The listing routes expose participant names, emails and dimension
+// scores, and nothing in the participant UI calls them — so they sit
+// behind the same reviewer token as /api/reviewer/*. Submitting stays
+// open, because participants must be able to submit.
 
-app.get("/api/attempts", async (req, res, next) => {
+app.get("/api/attempts", reviewerOnly, async (req, res, next) => {
   try {
     res.json({ attempts: await db.getAttempts({ phase: req.query.phase }) });
   } catch (e) { next(e); }
 });
 
-app.get("/api/progress", async (_req, res, next) => {
+app.get("/api/progress", reviewerOnly, async (_req, res, next) => {
   try {
     res.json({ progress: await db.getProgress() });
   } catch (e) { next(e); }
 });
 
-app.get("/api/participant/:name/status", async (req, res, next) => {
+app.get("/api/participant/:name/status", reviewerOnly, async (req, res, next) => {
   try {
     const [pre, post] = await Promise.all([
       db.getLatestAttempt(req.params.name, "pre"),
@@ -139,13 +163,18 @@ app.get("/api/participant/:name/status", async (req, res, next) => {
  */
 app.post("/api/attempts", async (req, res, next) => {
   try {
-    const { participantName, participantEmail, phase, answers, stageTimes, startedAt } = req.body || {};
+    const { participantName, participantEmail, phase, answers: rawAnswers, stageTimes, startedAt } = req.body || {};
+
+    // Blanks are not data. Whitespace-only, non-breaking spaces and
+    // zero-width characters are stripped, and anything left empty is
+    // dropped rather than stored as an answer.
+    const answers = cleanAnswers(rawAnswers);
 
     if (!participantName || !String(participantName).trim())
       return res.status(400).json({ error: "participantName is required" });
     if (!["pre", "post"].includes(phase))
       return res.status(400).json({ error: 'phase must be "pre" or "post"' });
-    if (!answers || typeof answers !== "object")
+    if (!rawAnswers || typeof rawAnswers !== "object")
       return res.status(400).json({ error: "answers must be an object keyed by item ref" });
 
     const assessment = await db.getAssessment(phase);
@@ -223,6 +252,10 @@ app.post("/api/attempts", async (req, res, next) => {
 
 app.use((err, _req, res, _next) => {
   console.error(err);
+  const text = `${err && err.message} ${err && err.code}`;
+  if (/timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed/i.test(text)) {
+    return res.status(503).json({ error: "the database is unreachable — try again in a moment" });
+  }
   res.status(500).json({ error: "internal error" });
 });
 

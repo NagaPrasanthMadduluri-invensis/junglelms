@@ -11,7 +11,9 @@
     "build": "npm run build --workspace=client",
     "start": "npm run start --workspace=server",
     "db:seed": "npm run db:seed --workspace=server --",
-    "db:reset": "npm run db:reset --workspace=server --"
+    "db:reset": "npm run db:reset --workspace=server --",
+    "admin:create": "npm run admin:create --workspace=server",
+    "admin:list": "npm run admin:list --workspace=server"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

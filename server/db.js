@@ -134,6 +134,26 @@ const SCHEMA = [
       updated_at INTEGER NOT NULL
    )`,
 
+  // Admin accounts live here, not in the environment, so they can be added
+  // or revoked without a redeploy. password_hash is scrypt — never plaintext.
+  `CREATE TABLE IF NOT EXISTS admins (
+      id            TEXT    PRIMARY KEY,
+      username      TEXT    NOT NULL UNIQUE,
+      password_hash TEXT    NOT NULL,
+      display_name  TEXT    NOT NULL DEFAULT '',
+      is_active     INTEGER NOT NULL DEFAULT 1,
+      created_at    INTEGER NOT NULL,
+      last_login_at INTEGER
+   )`,
+
+  // Small key/value store. Holds the admin session signing secret, so no
+  // environment variable is needed for admin access at all.
+  `CREATE TABLE IF NOT EXISTS settings (
+      key        TEXT    PRIMARY KEY,
+      value      TEXT    NOT NULL,
+      updated_at INTEGER NOT NULL
+   )`,
+
   `CREATE INDEX IF NOT EXISTS idx_stages_assessment ON stages (assessment_id, idx)`,
   `CREATE INDEX IF NOT EXISTS idx_items_stage       ON items  (stage_id, sort_order)`,
   `CREATE INDEX IF NOT EXISTS idx_options_item      ON item_options (item_id, sort_order)`,
@@ -142,8 +162,32 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_attempts_done     ON attempts (completed_at DESC)`,
 ];
 
+// Turso is a network hop, and the connection occasionally times out for a few
+// seconds. Retry transient failures rather than letting the whole process die.
+const TRANSIENT = /timeout|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|fetch failed|socket hang up/i;
+
+function isTransient(e) {
+  const text = `${e && e.message} ${e && e.code} ${e && e.cause && e.cause.code}`;
+  return TRANSIENT.test(text);
+}
+
+/** Run a database call, retrying a few times on a transient network error. */
+async function withRetry(fn, { attempts = 4, delayMs = 1200 } = {}) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      last = e;
+      if (!isTransient(e) || i === attempts - 1) throw e;
+      await new Promise((r) => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw last;
+}
+
 async function initDB() {
-  await client.batch(SCHEMA.map((sql) => ({ sql })), "deferred");
+  await withRetry(() => client.batch(SCHEMA.map((sql) => ({ sql })), "deferred"));
 }
 
 /** Lowercased, whitespace-collapsed name — the pre↔post linkage key. */
@@ -474,8 +518,130 @@ async function getProgress() {
   });
 }
 
+// ---- Admin accounts --------------------------------------------
+
+async function getAdminByUsername(username) {
+  const { rows } = await client.execute({
+    sql: `SELECT * FROM admins WHERE username = ? AND is_active = 1`,
+    args: [String(username || "").trim().toLowerCase()],
+  });
+  if (!rows[0]) return null;
+  const a = rows[0];
+  return {
+    id: a.id,
+    username: a.username,
+    passwordHash: a.password_hash,
+    displayName: a.display_name,
+    createdAt: Number(a.created_at),
+    lastLoginAt: a.last_login_at == null ? null : Number(a.last_login_at),
+  };
+}
+
+async function countAdmins() {
+  const { rows } = await client.execute(`SELECT COUNT(*) AS n FROM admins WHERE is_active = 1`);
+  return Number(rows[0].n);
+}
+
+async function listAdmins() {
+  const { rows } = await client.execute(
+    `SELECT id, username, display_name, created_at, last_login_at
+       FROM admins WHERE is_active = 1 ORDER BY username`
+  );
+  return rows.map((a) => ({
+    id: a.id,
+    username: a.username,
+    displayName: a.display_name,
+    createdAt: Number(a.created_at),
+    lastLoginAt: a.last_login_at == null ? null : Number(a.last_login_at),
+  }));
+}
+
+/** Inserts, or resets the password of an existing admin with the same name. */
+async function upsertAdmin({ username, passwordHash, displayName = "" }) {
+  const name = String(username).trim().toLowerCase();
+  await client.execute({
+    sql: `INSERT INTO admins (id, username, password_hash, display_name, is_active, created_at)
+          VALUES (?, ?, ?, ?, 1, ?)
+          ON CONFLICT(username) DO UPDATE SET
+            password_hash = excluded.password_hash,
+            display_name  = excluded.display_name,
+            is_active     = 1`,
+    args: [`adm-${name.replace(/[^a-z0-9]+/g, "-")}`, name, passwordHash, displayName, Date.now()],
+  });
+  return getAdminByUsername(name);
+}
+
+async function touchAdminLogin(id) {
+  await client.execute({
+    sql: `UPDATE admins SET last_login_at = ? WHERE id = ?`,
+    args: [Date.now(), id],
+  });
+}
+
+// ---- Settings --------------------------------------------------
+
+async function getSetting(key) {
+  const { rows } = await client.execute({
+    sql: `SELECT value FROM settings WHERE key = ?`, args: [key],
+  });
+  return rows[0] ? rows[0].value : null;
+}
+
+async function setSetting(key, value) {
+  await client.execute({
+    sql: `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    args: [key, value, Date.now()],
+  });
+}
+
+// ---- Admin / analytics reads -----------------------------------
+
+/** Every stored session blob, newest first — these are the in-progress sittings. */
+async function listSessions() {
+  const { rows } = await client.execute(
+    `SELECT id, data, updated_at FROM sessions ORDER BY updated_at DESC`
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    updatedAt: Number(r.updated_at),
+    data: parse(r.data, {}),
+  }));
+}
+
+/** Every response for one phase, grouped by attempt id. */
+async function getResponsesByPhase(phase) {
+  const { rows } = await client.execute({
+    sql: `SELECT r.* FROM responses r
+            JOIN attempts a ON a.id = r.attempt_id
+           WHERE a.phase = ?`,
+    args: [phase],
+  });
+  const byAttempt = new Map();
+  for (const r of rows) {
+    if (!byAttempt.has(r.attempt_id)) byAttempt.set(r.attempt_id, []);
+    byAttempt.get(r.attempt_id).push({
+      itemRef: r.item_ref,
+      value: parse(r.value, r.value),
+      confidence: r.confidence,
+      blocked: !!r.blocked,
+      justification: r.justification,
+      autoScore: r.auto_score == null ? null : Number(r.auto_score),
+    });
+  }
+  return byAttempt;
+}
+
+/** Delete one stored session blob by its id. */
+async function deleteSessionById(id) {
+  await client.execute({ sql: `DELETE FROM sessions WHERE id = ?`, args: [id] });
+}
+
 module.exports = {
-  client, initDB, participantKey,
+  client, initDB, withRetry, participantKey,
+  getAdminByUsername, countAdmins, listAdmins, upsertAdmin, touchAdminLogin,
+  getSetting, setSetting,
+  listSessions, getResponsesByPhase, deleteSessionById,
   listAssessments, getAssessment, getAnswerKey,
   getSession, setSession, deleteSession,
   saveAttempt, getAttempts, getAttemptDetail, getLatestAttempt, getProgress,

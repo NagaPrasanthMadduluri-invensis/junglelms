@@ -38,9 +38,15 @@ export const api = {
 
   // ---- Session (resume) ----------------------------------------
 
+  /**
+   * Returns { ok, data }. `ok:false` means the read itself failed — the caller
+   * must NOT treat that as "no saved session", or it will overwrite good
+   * answers with an empty state on the next save.
+   */
   async getSession() {
     const res = await request(`/api/session/${getSessionId()}`);
-    return res.error ? null : res.data;
+    if (res.error) return { ok: false, data: null };
+    return { ok: true, data: res.data };
   },
 
   async setSession(data) {

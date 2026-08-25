@@ -369,7 +369,8 @@ module.exports = [
             "stem": "Optional: name one thing on this list you would rather not be asked to do in front of colleagues, and why.",
             "hint": "Optional. Consistently the most useful single input to pairing.",
             "config": {
-              "rows": 3
+              "rows": 3,
+              "optional": true
             }
           }
         ]

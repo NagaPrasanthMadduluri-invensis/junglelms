@@ -94,7 +94,7 @@ function scoreAttempt(key, responses) {
 // a blank is data too — so this reports gaps, it does not block a submit.
 // =====================================================================
 
-const isFilled = (v) => typeof v === "string" ? v.trim() !== "" : v !== undefined && v !== null && v !== "";
+const { hasContent: isFilled } = require("./sanitize");
 
 /**
  * @param assessment  full tree from db.getAssessment()

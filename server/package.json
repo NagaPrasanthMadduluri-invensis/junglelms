@@ -7,7 +7,9 @@
     "dev": "node --watch index.js",
     "start": "node index.js",
     "db:seed": "node seed.js",
-    "db:reset": "node reset.js"
+    "db:reset": "node reset.js",
+    "admin:create": "node create-admin.js",
+    "admin:list": "node create-admin.js --list"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",

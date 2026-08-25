@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import AdminLogin from "./AdminLogin";
+import { cleanText, hasContent } from "./sanitize";
+import { validateScreen, subRefs } from "./validate";
 import "./assessment.css";
+import "./admin.css";   // sidebar admin button + sign-in modal
 
 // =====================================================================
 // Stage-driven assessment engine.
@@ -53,7 +57,54 @@ function buildScreens(assessment) {
   return screens;
 }
 
-export default function Assessment() {
+/**
+ * These two MUST stay at module scope.
+ *
+ * Declared inside Assessment(), their function identity changed on every
+ * render, so React treated each keystroke as a new component type and
+ * unmounted/remounted the <textarea> — losing focus after one character.
+ */
+function TextArea({ value, rows = 4, placeholder = "", onChange, invalid = false }) {
+  const v = typeof value === "string" ? value : "";
+  const n = words(v);
+  return (
+    <>
+      <textarea
+        rows={rows}
+        placeholder={placeholder}
+        value={v}
+        aria-invalid={invalid || undefined}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <div className="count">{n} {n === 1 ? "word" : "words"}</div>
+    </>
+  );
+}
+
+function Confidence({ name, choices, value, onChange }) {
+  const opts = choices && choices.length ? choices : CONF_DEFAULT;
+  return (
+    <div className="conf">
+      <span className="lbl">Confidence in this answer</span>
+      <div className="seg">
+        {opts.map((x) => (
+          <label key={x}>
+            <input
+              type="radio"
+              name={`${name}-conf`}
+              value={x}
+              checked={value === x}
+              onChange={() => onChange(x)}
+            />
+            {x}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   const [phase, setPhase] = useState("pre");
   const [assessment, setAssessment] = useState(null);
   const [loadError, setLoadError] = useState(null);
@@ -66,6 +117,9 @@ export default function Assessment() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(null);
   const [restored, setRestored] = useState(false);
+  const [resumeBlocked, setResumeBlocked] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
 
   const startedAt = useRef(Date.now());
   const stageTimes = useRef({});
@@ -92,8 +146,19 @@ export default function Assessment() {
   useEffect(() => {
     if (!assessment || restored) return;
     (async () => {
-      const saved = await api.getSession();
-      if (saved && saved.phase === phase && saved.answers) {
+      const { ok, data: saved } = await api.getSession();
+      if (!ok) {
+        // The read failed. Stay read-only rather than risk clobbering a saved
+        // sitting with an empty one.
+        setResumeBlocked(true);
+        setToast("Could not reach the server — your answers are not being saved");
+        return;
+      }
+      // Only announce a resume when there is actual progress to resume —
+      // a freshly-created empty session is not a resume.
+      const hasProgress = saved && saved.answers &&
+        (Object.keys(saved.answers).length > 0 || (saved.idx || 0) > 1 || (saved.name || "").trim());
+      if (saved && saved.phase === phase && hasProgress) {
         setAnswers(saved.answers || {});
         setName(saved.name || "");
         setEmail(saved.email || "");
@@ -110,18 +175,19 @@ export default function Assessment() {
   const screens = useMemo(() => (assessment ? buildScreens(assessment) : []), [assessment]);
   const screen = screens[idx];
   const stage = screen && screen.stage;
+  const nameOk = hasContent(name);
 
   // ---- persist -----------------------------------------------------
 
   useEffect(() => {
-    if (!assessment || !restored || submitted) return;
+    if (!assessment || !restored || submitted || resumeBlocked) return;
     api.setSession({
       phase, idx, answers, name, email,
       startedAt: startedAt.current,
       stageTimes: stageTimes.current,
       visited: [...visited.current],
     });
-  }, [assessment, restored, submitted, phase, idx, answers, name, email]);
+  }, [assessment, restored, submitted, resumeBlocked, phase, idx, answers, name, email]);
 
   // ---- clocks ------------------------------------------------------
 
@@ -146,6 +212,14 @@ export default function Assessment() {
   const A = (ref) => answers[ref] || {};
   const put = (ref, patch) =>
     setAnswers((prev) => ({ ...prev, [ref]: { ...(prev[ref] || {}), ...patch } }));
+
+  // Stable identities: the clock re-renders this component every second, and
+  // the modal must not see new props on every tick.
+  const closeAdmin = useCallback(() => setAdminOpen(false), []);
+  const signedInAdmin = useCallback((who) => {
+    setAdminOpen(false);
+    onAdminSignedIn(who);
+  }, [onAdminSignedIn]);
 
   // ---- navigation --------------------------------------------------
 
@@ -177,11 +251,43 @@ export default function Assessment() {
 
   const screenOfStage = (stageIdx) => screens.findIndex((s) => s.stageIdx === stageIdx);
 
+  // ---- required-answer validation ------------------------------------
+  // The rules live in ./validate.js so they can be tested without a browser.
+
+  const filled = hasContent;
+  const validate = (scr) => validateScreen(scr, { answers, name });
+
+  // Recomputed live once errors are on screen, so they clear as fields are filled.
+  const errors = useMemo(
+    () => (showErrors ? validate(screen) : {}),
+    [showErrors, screen, answers, name]
+  );
+  const errorCount = Object.keys(errors).length;
+  const err = (ref) => errors[ref];
+
+  /** Continue, but only when this screen is complete. */
+  function tryAdvance(next) {
+    const found = validate(screen);
+    if (Object.keys(found).length > 0) {
+      setShowErrors(true);
+      // Put the first unanswered question in view.
+      requestAnimationFrame(() => {
+        const el = document.querySelector("[data-err]");
+        if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+      return;
+    }
+    setShowErrors(false);
+    go(next);
+  }
+
+  // A new screen starts clean.
+  useEffect(() => { setShowErrors(false); }, [idx]);
+
   // ---- completeness (mirrors the server's rules) ---------------------
 
   const completeness = useMemo(() => {
     if (!assessment) return [];
-    const filled = (v) => (typeof v === "string" ? v.trim() !== "" : v !== undefined && v !== null && v !== "");
     const rows = [];
     rows.push({ label: "Name", detail: "so the right pre-work reaches you", complete: filled(name) });
 
@@ -225,15 +331,31 @@ export default function Assessment() {
 
   async function submit() {
     setSubmitting(true);
+    // Clean before sending: the server sanitises too, but there is no reason
+    // to ship whitespace-only values over the wire at all.
+    const cleaned = {};
+    for (const [ref, a] of Object.entries(answers)) {
+      const value = Array.isArray(a.value) ? a.value : cleanText(a.value);
+      const entry = {
+        value,
+        confidence: cleanText(a.confidence),
+        justification: cleanText(a.justification),
+        blocked: !!a.blocked,
+      };
+      if (hasContent(value) || entry.blocked || entry.confidence || entry.justification) {
+        cleaned[ref] = entry;
+      }
+    }
+
     const payload = {
-      participantName: name,
-      participantEmail: email,
+      participantName: cleanText(name),
+      participantEmail: cleanText(email),
       phase,
       startedAt: startedAt.current,
       stageTimes: Object.fromEntries(
         Object.entries(stageTimes.current).map(([k, v]) => [k, Math.round(v / 1000)])
       ),
-      answers,
+      answers: cleaned,
     };
     const res = await api.submitAttempt(payload);
     setSubmitting(false);
@@ -290,7 +412,12 @@ export default function Assessment() {
     let body, filename, type;
 
     if (kind === "csv") {
-      const q = (v) => '"' + String(v).replace(/"/g, '""').replace(/\r?\n/g, " ⏎ ") + '"';
+      // A leading =, +, - or @ makes a spreadsheet treat the cell as a formula.
+      const q = (v) => {
+        let t = String(v);
+        if (/^[=+\-@\t\r]/.test(t)) t = "'" + t;
+        return '"' + t.replace(/"/g, '""').replace(/\r?\n/g, " ⏎ ") + '"';
+      };
       body =
         "participant,item,response,confidence,recorded\n" +
         rows.map((r) => [q(who), q(r.item), q(r.response), q(r.confidence), q(r.recorded)].join(",")).join("\n");
@@ -320,45 +447,6 @@ export default function Assessment() {
   // FIELD RENDERERS
   // =====================================================================
 
-  function TextArea({ refKey, rows = 4, placeholder = "" }) {
-    const v = A(refKey).value || "";
-    return (
-      <>
-        <textarea
-          rows={rows}
-          placeholder={placeholder}
-          value={v}
-          onChange={(e) => put(refKey, { value: e.target.value })}
-        />
-        <div className="count">{words(v)} words</div>
-      </>
-    );
-  }
-
-  function Confidence({ refKey, choices }) {
-    const opts = choices && choices.length ? choices : CONF_DEFAULT;
-    const v = A(refKey).confidence || "";
-    return (
-      <div className="conf">
-        <span className="lbl">Confidence in this answer</span>
-        <div className="seg">
-          {opts.map((x) => (
-            <label key={x}>
-              <input
-                type="radio"
-                name={`${refKey}-conf`}
-                value={x}
-                checked={v === x}
-                onChange={() => put(refKey, { confidence: x })}
-              />
-              {x}
-            </label>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   // =====================================================================
   // STAGE RENDERERS
   // =====================================================================
@@ -380,6 +468,7 @@ export default function Assessment() {
                   type="text"
                   placeholder={item.hint}
                   value={A(item.ref).value || ""}
+                  aria-invalid={!!err(item.ref)}
                   onChange={(e) => put(item.ref, { value: e.target.value })}
                 />
                 <label className="blocked">
@@ -391,6 +480,7 @@ export default function Assessment() {
                   blocked
                 </label>
               </div>
+              {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
             </div>
           ))}
         </div>
@@ -427,9 +517,13 @@ export default function Assessment() {
               {bands.map((item) => {
                 const a = A(item.ref);
                 const conf = (item.config && item.config.confidence) || ["Low", "Med", "High"];
+                const rowErr = err(item.ref) || err(`${item.ref}::conf`);
                 return (
-                  <tr key={item.ref}>
-                    <td>{item.stem}</td>
+                  <tr key={item.ref} className={rowErr ? "row-err" : ""} {...(rowErr ? { "data-err": true } : {})}>
+                    <td>
+                      {item.stem}
+                      {rowErr && <div className="field-err">{rowErr}</div>}
+                    </td>
                     {[0, 1, 2, 3, 4].map((n) => (
                       <td key={n}>
                         <input
@@ -460,8 +554,13 @@ export default function Assessment() {
         </div>
         {free.map((item) => (
           <div className="field" key={item.ref}>
-            <label>{item.stem}</label>
-            <TextArea refKey={item.ref} rows={(item.config && item.config.rows) || 3} placeholder={item.hint} />
+            <label>{item.stem} <span className="opt">optional</span></label>
+            <TextArea
+              value={A(item.ref).value}
+              rows={(item.config && item.config.rows) || 3}
+              placeholder={item.hint}
+              onChange={(v) => put(item.ref, { value: v })}
+            />
           </div>
         ))}
       </>
@@ -509,13 +608,25 @@ export default function Assessment() {
               );
             })}
           </div>
+          {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
           {item.config && item.config.justify && (
             <div className="field" style={{ marginTop: 16 }}>
+              <div className="opt-note">Optional</div>
               <label>{item.config.justify}</label>
-              <TextArea refKey={item.ref} rows={2} />
+              <TextArea
+                value={A(item.ref).justification}
+                rows={2}
+                onChange={(v) => put(item.ref, { justification: v })}
+              />
             </div>
           )}
-          <Confidence refKey={item.ref} choices={item.config && item.config.confidence} />
+          <Confidence
+            name={item.ref}
+            choices={item.config && item.config.confidence}
+            value={A(item.ref).confidence || ""}
+            onChange={(v) => put(item.ref, { confidence: v })}
+          />
+          {err(`${item.ref}::conf`) && <div className="field-err" data-err>{err(`${item.ref}::conf`)}</div>}
         </div>
       </>
     );
@@ -557,10 +668,17 @@ export default function Assessment() {
           </>
         )}
 
+        {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
         {(item.config.subs || []).map((sub) => (
           <div className="field" key={sub[0]}>
             <label>({sub[0]}) {sub[1]}</label>
-            <TextArea refKey={`${item.ref}_${sub[0]}`} rows={sub[0] === "a" ? 5 : 3} />
+            <TextArea
+              value={A(`${item.ref}_${sub[0]}`).value}
+              rows={sub[0] === "a" ? 5 : 3}
+              invalid={!!err(`${item.ref}_${sub[0]}`)}
+              onChange={(v) => put(`${item.ref}_${sub[0]}`, { value: v })}
+            />
+            {err(`${item.ref}_${sub[0]}`) && <div className="field-err" data-err>{err(`${item.ref}_${sub[0]}`)}</div>}
           </div>
         ))}
       </>
@@ -592,14 +710,21 @@ export default function Assessment() {
               type="text"
               value={A(item.ref).value || ""}
               placeholder={item.hint}
+              aria-invalid={!!err(item.ref)}
               onChange={(e) => put(item.ref, { value: e.target.value })}
             />
+            {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
           </div>
         ))}
         {notes.map((item) => (
           <div className="field" key={item.ref}>
             <label>{item.stem}</label>
-            <TextArea refKey={item.ref} rows={(item.config && item.config.rows) || 3} placeholder={item.hint} />
+            <TextArea
+              value={A(item.ref).value}
+              rows={(item.config && item.config.rows) || 3}
+              placeholder={item.hint}
+              onChange={(v) => put(item.ref, { value: v })}
+            />
           </div>
         ))}
       </>
@@ -615,7 +740,13 @@ export default function Assessment() {
         {s.items.map((item) => (
           <div className="field" key={item.ref}>
             <label><strong>{item.ref}.</strong> {item.stem}</label>
-            <TextArea refKey={item.ref} rows={(item.config && item.config.rows) || 6} />
+            <TextArea
+              value={A(item.ref).value}
+              rows={(item.config && item.config.rows) || 6}
+              invalid={!!err(item.ref)}
+              onChange={(v) => put(item.ref, { value: v })}
+            />
+            {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
           </div>
         ))}
       </>
@@ -635,14 +766,21 @@ export default function Assessment() {
               <select
                 className="pick"
                 value={A(item.ref).value || ""}
+                aria-invalid={!!err(item.ref)}
                 onChange={(e) => put(item.ref, { value: e.target.value })}
               >
                 <option value="">Choose one</option>
                 {(item.config.choices || []).map((c) => <option key={c}>{c}</option>)}
               </select>
             ) : (
-              <TextArea refKey={item.ref} rows={(item.config && item.config.rows) || 2} />
+              <TextArea
+                value={A(item.ref).value}
+                rows={(item.config && item.config.rows) || 2}
+                invalid={!!err(item.ref)}
+                onChange={(v) => put(item.ref, { value: v })}
+              />
             )}
+            {err(item.ref) && <div className="field-err" data-err>{err(item.ref)}</div>}
           </div>
         ))}
       </>
@@ -677,9 +815,16 @@ export default function Assessment() {
             ))}
           </div>
         )}
+        {gaps > 0 && (
+          <div className="err-banner" role="alert">
+            <strong>{gaps === 1 ? "1 section is incomplete" : `${gaps} sections are incomplete`}</strong>
+            <span>Every question has to be answered before you can submit. Use Back to fill them in.</span>
+          </div>
+        )}
         <div className="nav">
           {canGoBack() && <button className="btn ghost" onClick={() => go(idx - 1)}>Back</button>}
-          <button className="btn" onClick={submit} disabled={submitting}>
+          <button className="btn" onClick={submit} disabled={submitting || gaps > 0}
+                  title={gaps > 0 ? "Answer every question first" : ""}>
             {submitting ? "Submitting…" : "Submit answers"}
           </button>
           <button className="btn ghost" onClick={() => exportAll("csv")}>Export CSV</button>
@@ -734,11 +879,19 @@ export default function Assessment() {
         <h1>Your name, once</h1>
         <p className="lead">{c.identLead}</p>
         <div className="field">
-          <label>Name</label>
-          <input type="text" value={name} placeholder="First and last" onChange={(e) => setName(e.target.value)} />
+          <label>Name <span className="req">required</span></label>
+          <input
+            type="text"
+            value={name}
+            placeholder="First and last"
+            aria-required="true"
+            aria-invalid={!nameOk}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && nameOk) go(idx + 1); }}
+          />
         </div>
         <div className="field">
-          <label>Work email</label>
+          <label>Work email <span className="opt">optional</span></label>
           <input type="text" value={email} placeholder="for the pre-work packet only" onChange={(e) => setEmail(e.target.value)} />
         </div>
         {c.identNote && (
@@ -747,7 +900,13 @@ export default function Assessment() {
             <p style={{ marginBottom: 0 }}>{c.identNote}</p>
           </div>
         )}
-        {navBar()}
+        <div className="nav">
+          {canGoBack() && <button className="btn ghost" onClick={() => go(idx - 1)}>Back</button>}
+          <button className="btn" disabled={!nameOk} onClick={() => tryAdvance(idx + 1)}>Continue</button>
+          <span className="navnote">
+            {nameOk ? "answers are kept as you go" : "your name is required to continue"}
+          </span>
+        </div>
       </>
     );
   }
@@ -785,13 +944,21 @@ export default function Assessment() {
   function navBar(oneWay) {
     const isLast = idx >= screens.length - 2; // review is the last interactive screen
     return (
-      <div className="nav">
-        {canGoBack() && <button className="btn ghost" onClick={() => go(idx - 1)}>Back</button>}
-        {!isLast && <button className="btn" onClick={() => go(idx + 1)}>Continue</button>}
-        <span className="navnote">
-          {oneWay ? "one item per screen · no going back inside this stage" : "answers are kept as you go"}
-        </span>
-      </div>
+      <>
+        {errorCount > 0 && (
+          <div className="err-banner" role="alert">
+            <strong>{errorCount === 1 ? "1 question still needs an answer" : `${errorCount} questions still need an answer`}</strong>
+            <span>Everything on this screen has to be filled in before you can continue.</span>
+          </div>
+        )}
+        <div className="nav">
+          {canGoBack() && <button className="btn ghost" onClick={() => go(idx - 1)}>Back</button>}
+          {!isLast && <button className="btn" onClick={() => tryAdvance(idx + 1)}>Continue</button>}
+          <span className="navnote">
+            {oneWay ? "one item per screen · no going back inside this stage" : "answers are kept as you go"}
+          </span>
+        </div>
+      </>
     );
   }
 
@@ -799,6 +966,7 @@ export default function Assessment() {
     const cur = screen ? screen.stageIdx : null;
     return (
       <nav className="rail" aria-label="Assessment stages">
+        <div className="railinner">
         <h2>Stages</h2>
         <div>
           {assessment.stages.map((s, i) => {
@@ -818,6 +986,20 @@ export default function Assessment() {
         </div>
         <div className="railnote">
           Answers are saved as you go and can be resumed on this device.
+        </div>
+
+        <div className="rail-admin">
+          {admin ? (
+            <button className="rail-admin-btn signed-in" onClick={onOpenAdmin}>
+              Open admin dashboard
+              <span className="rail-admin-who">{admin.displayName || admin.username}</span>
+            </button>
+          ) : (
+            <button className="rail-admin-btn" onClick={() => setAdminOpen(true)}>
+              Log in as admin
+            </button>
+          )}
+        </div>
         </div>
       </nav>
     );
@@ -873,7 +1055,9 @@ export default function Assessment() {
   return (
     <>
       <div className="banner">
-        <span><span className="tag">RUN</span> {phase}-assessment</span>
+        <span className="brand">
+          <img src="/logo-white.svg" alt="Edstellar" />
+        </span>
         <span className="sep">/</span>
         <span>{assessment.subtitle}</span>
         <span className="clock">
@@ -890,6 +1074,10 @@ export default function Assessment() {
       </div>
 
       <div className={"toast" + (toast ? " up" : "")}>{toast}</div>
+
+      {adminOpen && (
+        <AdminLogin onClose={closeAdmin} onSignedIn={signedInAdmin} />
+      )}
     </>
   );
 }
