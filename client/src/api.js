@@ -14,68 +14,62 @@ function getSessionId() {
   return sid;
 }
 
-async function safeFetch(url, opts = {}) {
+async function request(url, opts = {}) {
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: body.error || `${res.status} ${res.statusText}`, ...body };
+  return body;
 }
 
 export const api = {
-  // ---- Session -------------------------------------------------
+  // ---- Assessment content --------------------------------------
+
+  /** Returns { assessment } or { error }. */
+  getAssessment(phase) {
+    return request(`/api/assessment/${phase}`);
+  },
+
+  listAssessments() {
+    return request("/api/assessments");
+  },
+
+  // ---- Session (resume) ----------------------------------------
 
   async getSession() {
-    try {
-      const sid = getSessionId();
-      const { data } = await safeFetch(`/api/session/${sid}`);
-      return data; // object or null
-    } catch {
-      return null;
-    }
+    const res = await request(`/api/session/${getSessionId()}`);
+    return res.error ? null : res.data;
   },
 
   async setSession(data) {
-    try {
-      const sid = getSessionId();
-      await safeFetch(`/api/session/${sid}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-      });
-    } catch {
-      // non-fatal — the user just won't be able to resume
-    }
+    // Non-fatal: the participant just won't be able to resume.
+    await request(`/api/session/${getSessionId()}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
   },
 
   async deleteSession() {
-    try {
-      const sid = getSessionId();
-      await safeFetch(`/api/session/${sid}`, { method: "DELETE" });
-    } catch {
-      // non-fatal
-    }
+    await request(`/api/session/${getSessionId()}`, { method: "DELETE" });
   },
 
-  // ---- Results -------------------------------------------------
+  // ---- Attempts ------------------------------------------------
 
-  async getResults() {
-    try {
-      const { results } = await safeFetch("/api/results");
-      return results; // already sorted newest-first by the server
-    } catch {
-      return [];
-    }
+  submitAttempt(payload) {
+    return request("/api/attempts", { method: "POST", body: JSON.stringify(payload) });
   },
 
-  async saveResult(result) {
-    try {
-      await safeFetch("/api/results", {
-        method: "POST",
-        body: JSON.stringify(result),
-      });
-    } catch {
-      // non-fatal — local result still shows on screen
-    }
+  getAttempts(phase) {
+    return request(`/api/attempts${phase ? `?phase=${phase}` : ""}`);
+  },
+
+  getProgress() {
+    return request("/api/progress");
+  },
+
+  participantStatus(name) {
+    return request(`/api/participant/${encodeURIComponent(name)}/status`);
   },
 };
