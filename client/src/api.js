@@ -3,7 +3,7 @@
 // Keeps the component clean and centralises all fetch() calls.
 // ---------------------------------------------------------------
 
-const SESSION_STORAGE_KEY = "junglelms_sid";
+const SESSION_STORAGE_KEY = "bechtel_assessment_sid";
 
 function getSessionId() {
   let sid = localStorage.getItem(SESSION_STORAGE_KEY);

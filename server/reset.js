@@ -32,7 +32,7 @@ async function main() {
   const skipPrompt = args.includes("--yes") || args.includes("-y");
   const tables = keepQuestions ? RESULT_TABLES : ALL_TABLES;
 
-  const target = process.env.TURSO_DATABASE_URL || "local file (junglelms.db)";
+  const target = process.env.TURSO_DATABASE_URL || "local file (bechtel.db)";
   console.log(`\n  Database: ${target}`);
   console.log(`  Will DROP: ${tables.join(", ")}\n`);
 

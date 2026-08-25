@@ -540,7 +540,7 @@ export default function Admin({ admin, onExit, onSignedOut }) {
             <div className="admin-top-title">
               {PHASE_LABEL[phase]} · Applied MLOps on Databricks and Azure DevOps
             </div>
-            <div className="admin-top-sub">Cohort dashboard</div>
+            <div className="admin-top-sub">Bechtel · cohort dashboard</div>
           </div>
         </div>
         <div className="admin-top-right">

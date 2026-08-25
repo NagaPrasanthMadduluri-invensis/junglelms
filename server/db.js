@@ -1,10 +1,10 @@
 const { createClient } = require("@libsql/client");
 const path = require("path");
 
-// Local dev  → file:./junglelms.db  (no TURSO_DATABASE_URL needed)
+// Local dev  → file:./bechtel.db  (no TURSO_DATABASE_URL needed)
 // Production → libsql://your-db.turso.io  (set TURSO_DATABASE_URL + TURSO_AUTH_TOKEN)
 const client = createClient({
-  url: process.env.TURSO_DATABASE_URL || `file:${path.join(__dirname, "..", "junglelms.db")}`,
+  url: process.env.TURSO_DATABASE_URL || `file:${path.join(__dirname, "..", "bechtel.db")}`,
   authToken: process.env.TURSO_AUTH_TOKEN,
 });
 

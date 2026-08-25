@@ -46,7 +46,7 @@ module.exports = [
       "eyebrow": "calibration, not examination",
       "readThis": [
         "There is no pass mark and no ranking. Your results are used for exactly four things: how fast we move each day, who you are paired with, which pre-work packet you get, and whether Day 3 covers operating models or extends the same loop to LLM workloads.",
-        "Nothing here is reported to your management by name. The client receives a cohort-level summary, not a leaderboard. If that were not true, the rational response would be to game this, and a gamed calibration produces three days pitched at the wrong level — which costs you, not us.",
+        "Nothing here is reported to your management by name. Bechtel receives a cohort-level summary, not a leaderboard. If that were not true, the rational response would be to game this, and a gamed calibration produces three days pitched at the wrong level — which costs you, not us.",
         "It is open-book. Use documentation, your own repositories, and an AI assistant if you want to — that is how you work, so it is how we should assess. Two consequences: tick the box at the end if you used one (no penalty, it helps us read your answers), and be warned that a generic correct-sounding answer scores in the middle. What scores well is specificity about systems you have actually operated."
       ],
       "stageBlurbs": [
@@ -60,7 +60,7 @@ module.exports = [
         "See what is unanswered, then submit."
       ],
       "identLead": "Needed for three things only: to send you the right pre-work packet, to book your interview slot, and so the trainer knows which answers belong together.",
-      "identNote": "Your name sits on your answers so the trainer can pair you sensibly and send you the right pre-work. It does not appear against a capability band in anything the client receives."
+      "identNote": "Your name sits on your answers so the trainer can pair you sensibly and send you the right pre-work. It does not appear against a capability band in anything Bechtel receives."
     },
     "stages": [
       {
@@ -152,7 +152,7 @@ module.exports = [
               "I have designed the approach for others and debugged it in production."
             ]
           ],
-          "reviewer": "Self-rating is never used alone. Mean self-rating minus mean measured band gives the calibration index, used for two things only: where the trainer slows down without being asked, and pairing. +1.0 or more in a dimension means expect resistance at the first lab that contradicts the self-image — have the failing-gate demonstration ready and let the artefact make the argument. −0.7 or less is usually the strongest engineer in the room: pair them as a driver early so the room recalibrates who is credible. Never shown to the client, never described as overconfidence in writing."
+          "reviewer": "Self-rating is never used alone. Mean self-rating minus mean measured band gives the calibration index, used for two things only: where the trainer slows down without being asked, and pairing. +1.0 or more in a dimension means expect resistance at the first lab that contradicts the self-image — have the failing-gate demonstration ready and let the artefact make the argument. −0.7 or less is usually the strongest engineer in the room: pair them as a driver early so the room recalibrates who is credible. Never shown to Bechtel, never described as overconfidence in writing."
         },
         "items": [
           {
@@ -1592,7 +1592,7 @@ module.exports = [
           "leadComplete": "Everything is answered. No score is calculated here and none will be shown to you.",
           "whatNext": [
             "The trainer books a 12–15 minute conversation with you. It covers the last change you shipped, a time data broke something downstream, how you would know today if something you own were quietly wrong, what you can and cannot do yourself in the workspace, and whether LLM work is genuinely landing on you.",
-            "Then a one-page memo goes to the sponsor with four decisions and one recommendation. Nobody is named against a capability band in it."
+            "Then a one-page memo goes to Bechtel with four decisions and one recommendation. Nobody is named against a capability band in it."
           ]
         },
         "items": []

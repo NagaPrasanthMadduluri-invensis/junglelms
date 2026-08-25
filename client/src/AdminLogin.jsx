@@ -52,7 +52,7 @@ export default function AdminLogin({ onClose, onSignedIn }) {
       <div className="modal" role="dialog" aria-modal="true" aria-label="Admin sign in">
         <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
 
-        <p className="eyebrow">Applied MLOps · Databricks &amp; Azure DevOps</p>
+        <p className="eyebrow">Bechtel × Edstellar · Applied MLOps</p>
         <h2 className="modal-title">Admin sign in</h2>
 
         {configured === false ? (
