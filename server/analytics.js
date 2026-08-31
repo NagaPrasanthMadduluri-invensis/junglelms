@@ -71,7 +71,7 @@ function flattenItems(assessment) {
  * In-progress sittings come from the session blobs, which carry the name the
  * participant typed on the identity screen.
  */
-function buildParticipants(assessment, attempts, responsesByAttempt, sessions) {
+function buildParticipants(assessment, attempts, responsesByAttempt, sessions, rosterEmails = null) {
   const { items, answerable, required } = flattenItems(assessment);
   const totalAnswerable = answerable.length;
   const itemByRef = new Map(items.map((i) => [i.ref, i]));
@@ -130,11 +130,15 @@ function buildParticipants(assessment, attempts, responsesByAttempt, sessions) {
     });
   }
 
-  // In-progress: a session blob with a name, for someone with no submission yet.
+  // In-progress: a session blob for someone on the roster with no submission
+  // yet. A registered email is required — listing anyone who merely typed a
+  // name would put unregistered people on the dashboard.
   for (const s of sessions) {
     const d = s.data || {};
     const name = (d.name || "").trim();
-    if (!name || d.phase !== assessment.phase) continue;
+    const email = (d.email || "").trim().toLowerCase();
+    if (!name || !email || d.phase !== assessment.phase) continue;
+    if (rosterEmails && !rosterEmails.has(email)) continue;
     const key = name.toLowerCase().replace(/\s+/g, " ");
     if (submittedKeys.has(key)) continue;
 

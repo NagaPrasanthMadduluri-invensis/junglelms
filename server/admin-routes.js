@@ -78,12 +78,17 @@ router.use(auth.adminOnly);
 async function loadPhase(phase) {
   const assessment = await db.getAssessment(phase);
   if (!assessment) return null;
-  const [attempts, responsesByAttempt, sessions] = await Promise.all([
+  const [attempts, responsesByAttempt, sessions, roster] = await Promise.all([
     db.getAttempts({ phase }),
     db.getResponsesByPhase(phase),
     db.listSessions(),
+    db.listRoster(),
   ]);
-  const participants = buildParticipants(assessment, attempts, responsesByAttempt, sessions);
+  // Only people on the roster as participants can appear in the cohort.
+  const rosterEmails = new Set(
+    roster.filter((r) => r.role === "participant").map((r) => r.email)
+  );
+  const participants = buildParticipants(assessment, attempts, responsesByAttempt, sessions, rosterEmails);
   return { assessment, participants };
 }
 

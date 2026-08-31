@@ -138,7 +138,21 @@ app.put("/api/session/:id", async (req, res, next) => {
   try {
     if (!req.body || typeof req.body !== "object")
       return res.status(400).json({ error: "body must be a JSON object" });
-    await db.setSession(req.params.id, req.body);
+
+    // An in-progress sitting is only stored once the roster has accepted the
+    // participant. Without this, anyone who typed a name on the identity
+    // screen was written to the database and then appeared on the dashboard,
+    // whether or not their email was ever registered.
+    const email = (req.body.email || "").trim();
+    if (!email) {
+      return res.status(403).json({ error: "an email is required before progress can be saved", code: "no_email" });
+    }
+    const entry = await db.getRosterEntry(email);
+    if (!entry) return res.status(403).json({ error: NOT_REGISTERED, code: "not_registered" });
+    if (entry.role === "admin") return res.status(403).json({ error: ADMIN_ACCOUNT, code: "admin_account" });
+
+    // Store the roster's canonical spelling, never the typed casing.
+    await db.setSession(req.params.id, { ...req.body, email: entry.email });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

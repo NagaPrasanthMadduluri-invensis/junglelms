@@ -164,6 +164,7 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
         setAnswers(saved.answers || {});
         setName(saved.name || "");
         setEmail(saved.email || "");
+        if (saved.email) setEmailState("ok");
         stageTimes.current = saved.stageTimes || {};
         visited.current = new Set(saved.visited || []);
         startedAt.current = saved.startedAt || Date.now();
@@ -208,13 +209,17 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
 
   useEffect(() => {
     if (!assessment || !restored || submitted || resumeBlocked) return;
+    // Nothing is written until the roster has accepted this email. This keeps
+    // unregistered people out of the database entirely, rather than storing
+    // them and filtering them out of the dashboard afterwards.
+    if (!emailOk) return;
     api.setSession({
       phase, idx, answers, name, email,
       startedAt: startedAt.current,
       stageTimes: stageTimes.current,
       visited: [...visited.current],
     });
-  }, [assessment, restored, submitted, resumeBlocked, phase, idx, answers, name, email]);
+  }, [assessment, restored, submitted, resumeBlocked, emailOk, phase, idx, answers, name, email]);
 
   // ---- clocks ------------------------------------------------------
 
