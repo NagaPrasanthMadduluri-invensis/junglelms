@@ -146,6 +146,18 @@ const SCHEMA = [
       last_login_at INTEGER
    )`,
 
+  // The cohort roster: who may take the assessment at all. An email that is
+  // not here is refused on the identity screen and again at submit.
+  `CREATE TABLE IF NOT EXISTS roster (
+      id           TEXT    PRIMARY KEY,
+      email        TEXT    NOT NULL UNIQUE,
+      role         TEXT    NOT NULL DEFAULT 'participant'
+                           CHECK (role IN ('participant','admin')),
+      display_name TEXT    NOT NULL DEFAULT '',
+      is_active    INTEGER NOT NULL DEFAULT 1,
+      created_at   INTEGER NOT NULL
+   )`,
+
   // Small key/value store. Holds the admin session signing secret, so no
   // environment variable is needed for admin access at all.
   `CREATE TABLE IF NOT EXISTS settings (
@@ -160,6 +172,7 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_rubrics_item      ON item_rubrics (item_id, sort_order)`,
   `CREATE INDEX IF NOT EXISTS idx_attempts_person   ON attempts (participant_key, phase)`,
   `CREATE INDEX IF NOT EXISTS idx_attempts_done     ON attempts (completed_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_roster_email      ON roster (email)`,
 ];
 
 // Turso is a network hop, and the connection occasionally times out for a few
@@ -518,6 +531,71 @@ async function getProgress() {
   });
 }
 
+// ---- Roster ----------------------------------------------------
+
+/** Emails are compared lowercased and trimmed, always. */
+function normEmail(email) {
+  return String(email || "").trim().toLowerCase();
+}
+
+/** The roster row for this email, or null when they are not registered. */
+async function getRosterEntry(email) {
+  const e = normEmail(email);
+  if (!e) return null;
+  const { rows } = await withRetry(() => client.execute({
+    sql: `SELECT * FROM roster WHERE email = ? AND is_active = 1`,
+    args: [e],
+  }));
+  if (!rows[0]) return null;
+  const r = rows[0];
+  return {
+    id: r.id,
+    email: r.email,
+    role: r.role,
+    displayName: r.display_name,
+    createdAt: Number(r.created_at),
+  };
+}
+
+async function listRoster() {
+  const { rows } = await withRetry(() => client.execute(
+    `SELECT * FROM roster WHERE is_active = 1 ORDER BY role DESC, email`
+  ));
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    role: r.role,
+    displayName: r.display_name,
+    createdAt: Number(r.created_at),
+  }));
+}
+
+async function upsertRosterEntry({ email, role = "participant", displayName = "" }) {
+  const e = normEmail(email);
+  await withRetry(() => client.execute({
+    sql: `INSERT INTO roster (id, email, role, display_name, is_active, created_at)
+          VALUES (?, ?, ?, ?, 1, ?)
+          ON CONFLICT(email) DO UPDATE SET
+            role         = excluded.role,
+            display_name = CASE WHEN excluded.display_name <> ''
+                                THEN excluded.display_name ELSE roster.display_name END,
+            is_active    = 1`,
+    args: [`ros-${e.replace(/[^a-z0-9]+/g, "-")}`, e, role, displayName, Date.now()],
+  }));
+  return getRosterEntry(e);
+}
+
+/** Deactivate anyone no longer on the list, so the file stays the source of truth. */
+async function deactivateRosterExcept(emails) {
+  const keep = emails.map(normEmail);
+  const placeholders = keep.map(() => "?").join(",");
+  await withRetry(() => client.execute({
+    sql: `UPDATE roster SET is_active = 0
+           WHERE is_active = 1 ${keep.length ? `AND email NOT IN (${placeholders})` : ""}`,
+    args: keep,
+  }));
+}
+
 // ---- Admin accounts --------------------------------------------
 
 async function getAdminByUsername(username) {
@@ -569,6 +647,14 @@ async function upsertAdmin({ username, passwordHash, displayName = "" }) {
     args: [`adm-${name.replace(/[^a-z0-9]+/g, "-")}`, name, passwordHash, displayName, Date.now()],
   });
   return getAdminByUsername(name);
+}
+
+/** Revoke a dashboard login without touching their roster entry. */
+async function deactivateAdmin(username) {
+  await withRetry(() => client.execute({
+    sql: `UPDATE admins SET is_active = 0 WHERE username = ?`,
+    args: [String(username || "").trim().toLowerCase()],
+  }));
 }
 
 async function touchAdminLogin(id) {
@@ -638,8 +724,9 @@ async function deleteSessionById(id) {
 }
 
 module.exports = {
-  client, initDB, withRetry, participantKey,
-  getAdminByUsername, countAdmins, listAdmins, upsertAdmin, touchAdminLogin,
+  client, initDB, withRetry, participantKey, normEmail,
+  getRosterEntry, listRoster, upsertRosterEntry, deactivateRosterExcept,
+  getAdminByUsername, countAdmins, listAdmins, upsertAdmin, deactivateAdmin, touchAdminLogin,
   getSetting, setSetting,
   listSessions, getResponsesByPhase, deleteSessionById,
   listAssessments, getAssessment, getAnswerKey,

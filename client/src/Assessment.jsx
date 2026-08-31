@@ -120,6 +120,8 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   const [resumeBlocked, setResumeBlocked] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
+  // Roster check: null = not checked, "checking", "ok", or an error message.
+  const [emailState, setEmailState] = useState(null);
 
   const startedAt = useRef(Date.now());
   const stageTimes = useRef({});
@@ -176,6 +178,31 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   const screen = screens[idx];
   const stage = screen && screen.stage;
   const nameOk = hasContent(name);
+  const emailOk = emailState === "ok";
+
+  // Re-checking is required whenever the address changes.
+  const onEmailChange = (v) => {
+    setEmail(v);
+    setEmailState(null);
+  };
+
+  /**
+   * Verify the address against the cohort roster. Runs on Continue and on
+   * blur, so someone is told immediately rather than after 45 minutes.
+   */
+  async function checkEmail() {
+    const value = cleanText(email);
+    if (!value) { setEmailState("An email address is required."); return false; }
+    setEmailState("checking");
+    const res = await api.verifyParticipant(value);
+    if (res.ok) {
+      setEmail(res.email);        // store the roster's canonical spelling
+      setEmailState("ok");
+      return true;
+    }
+    setEmailState(res.error || "This email is not registered for this assessment.");
+    return false;
+  }
 
   // ---- persist -----------------------------------------------------
 
@@ -221,6 +248,14 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
     onAdminSignedIn(who);
   }, [onAdminSignedIn]);
 
+  /** Name, then a roster-checked email, then on to the assessment. */
+  async function identContinue() {
+    if (!nameOk) { setShowErrors(true); return; }
+    if (!emailOk && !(await checkEmail())) { setShowErrors(true); return; }
+    setShowErrors(false);
+    go(idx + 1);
+  }
+
   // ---- navigation --------------------------------------------------
 
   function go(next) {
@@ -255,12 +290,12 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   // The rules live in ./validate.js so they can be tested without a browser.
 
   const filled = hasContent;
-  const validate = (scr) => validateScreen(scr, { answers, name });
+  const validate = (scr) => validateScreen(scr, { answers, name, email });
 
   // Recomputed live once errors are on screen, so they clear as fields are filled.
   const errors = useMemo(
     () => (showErrors ? validate(screen) : {}),
-    [showErrors, screen, answers, name]
+    [showErrors, screen, answers, name, email]
   );
   const errorCount = Object.keys(errors).length;
   const err = (ref) => errors[ref];
@@ -359,7 +394,17 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
     };
     const res = await api.submitAttempt(payload);
     setSubmitting(false);
-    if (res.error) { setToast(res.error); return; }
+    if (res.error) {
+      setToast(res.error);
+      // An address the roster will not accept can only be fixed on the
+      // identity screen — including an admin address, which cannot sit the
+      // assessment at all.
+      if (res.code === "not_registered" || res.code === "admin_account") {
+        setEmailState(res.error);
+        go(1);
+      }
+      return;
+    }
     setSubmitted(res.attempt);
     await api.deleteSession();
     go(screens.length - 1);
@@ -891,8 +936,24 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
           />
         </div>
         <div className="field">
-          <label>Work email <span className="opt">optional</span></label>
-          <input type="text" value={email} placeholder="for the pre-work packet only" onChange={(e) => setEmail(e.target.value)} />
+          <label>Work email <span className="req">required</span></label>
+          <input
+            type="text"
+            inputMode="email"
+            value={email}
+            placeholder="your.name@bechtel.com"
+            autoComplete="email"
+            aria-required="true"
+            aria-invalid={!!(emailState && emailState !== "ok" && emailState !== "checking")}
+            onChange={(e) => onEmailChange(e.target.value)}
+            onBlur={() => { if (hasContent(email) && emailState === null) checkEmail(); }}
+            onKeyDown={(e) => { if (e.key === "Enter") identContinue(); }}
+          />
+          {emailState === "checking" && <div className="field-note">Checking…</div>}
+          {emailState === "ok" && <div className="field-ok">Registered — you can continue.</div>}
+          {emailState && emailState !== "ok" && emailState !== "checking" && (
+            <div className="field-err" data-err>{emailState}</div>
+          )}
         </div>
         {c.identNote && (
           <div className="note">
@@ -902,9 +963,14 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
         )}
         <div className="nav">
           {canGoBack() && <button className="btn ghost" onClick={() => go(idx - 1)}>Back</button>}
-          <button className="btn" disabled={!nameOk} onClick={() => tryAdvance(idx + 1)}>Continue</button>
+          <button className="btn" disabled={!nameOk || emailState === "checking"} onClick={identContinue}>
+            {emailState === "checking" ? "Checking…" : "Continue"}
+          </button>
           <span className="navnote">
-            {nameOk ? "answers are kept as you go" : "your name is required to continue"}
+            {!nameOk ? "your name is required to continue"
+              : !hasContent(email) ? "your Bechtel email is required to continue"
+              : emailOk ? "answers are kept as you go"
+              : "we need to check your email before you start"}
           </span>
         </div>
       </>

@@ -36,6 +36,17 @@ export const api = {
     return request("/api/assessments");
   },
 
+  /**
+   * Is this email registered for the assessment?
+   * Returns { ok:true, email, role } or { ok:false, error }.
+   */
+  verifyParticipant(email) {
+    return request("/api/participant/verify", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
+
   // ---- Session (resume) ----------------------------------------
 
   /**

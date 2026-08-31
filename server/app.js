@@ -94,6 +94,38 @@ app.get("/api/reviewer/attempts/:id", reviewerOnly, async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// ---- Roster ----------------------------------------------------
+
+const NOT_REGISTERED =
+  "This email is not registered for this assessment. Use the Bechtel address your invitation was sent to, or contact your Edstellar coordinator.";
+
+// An admin address is on the roster but is NOT a participant: it exists to
+// open the dashboard, not to sit the assessment. Say so plainly rather than
+// claiming it is unregistered, which would be untrue and confusing.
+const ADMIN_ACCOUNT =
+  "This is an administrator account. Use “Log in as admin” at the bottom of the sidebar to open the dashboard.";
+
+/**
+ * Is this email allowed to take the assessment?
+ *
+ * Answers only yes/no for the address supplied — it never returns the roster,
+ * so the cohort list cannot be read out of this endpoint.
+ */
+app.post("/api/participant/verify", async (req, res, next) => {
+  try {
+    const email = (req.body || {}).email;
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ ok: false, error: "An email address is required." });
+    }
+    const entry = await db.getRosterEntry(email);
+    if (!entry) return res.status(403).json({ ok: false, code: "not_registered", error: NOT_REGISTERED });
+    if (entry.role === "admin") {
+      return res.status(403).json({ ok: false, code: "admin_account", error: ADMIN_ACCOUNT });
+    }
+    res.json({ ok: true, email: entry.email, role: entry.role });
+  } catch (e) { next(e); }
+});
+
 // ---- Sessions --------------------------------------------------
 
 app.get("/api/session/:id", async (req, res, next) => {
@@ -174,6 +206,17 @@ app.post("/api/attempts", async (req, res, next) => {
       return res.status(400).json({ error: "participantName is required" });
     if (!["pre", "post"].includes(phase))
       return res.status(400).json({ error: 'phase must be "pre" or "post"' });
+
+    // The roster is the gate. The identity screen checks this too, but a
+    // submission must never be accepted from an address that is not on it.
+    if (!participantEmail || !String(participantEmail).trim())
+      return res.status(400).json({ error: "participantEmail is required" });
+
+    const rosterEntry = await db.getRosterEntry(participantEmail);
+    if (!rosterEntry)
+      return res.status(403).json({ error: NOT_REGISTERED, code: "not_registered" });
+    if (rosterEntry.role === "admin")
+      return res.status(403).json({ error: ADMIN_ACCOUNT, code: "admin_account" });
     if (!rawAnswers || typeof rawAnswers !== "object")
       return res.status(400).json({ error: "answers must be an object keyed by item ref" });
 
@@ -223,7 +266,7 @@ app.post("/api/attempts", async (req, res, next) => {
       id: `${phase}-${db.participantKey(name).replace(/[^a-z0-9]+/g, "-") || "unnamed"}-${completedAt}`,
       participantKey: db.participantKey(name),
       participantName: name,
-      participantEmail: (participantEmail || "").trim(),
+      participantEmail: rosterEntry.email,
       assessmentId: assessment.id,
       phase,
       status: "submitted",

@@ -71,9 +71,20 @@ export default function AdminLogin({ onClose, onSignedIn }) {
             </p>
 
             <div className="field">
-              <label>Username</label>
-              <input ref={firstField} type="text" value={username} autoComplete="username"
-                     onChange={(e) => setUsername(e.target.value)} />
+              <label>Email</label>
+              {/* type="text", not type="email", on purpose: this is a real
+                  form, so the browser would refuse to submit the standalone
+                  "admin" account, which is not an address. inputMode still
+                  raises an email keyboard on mobile. */}
+              <input
+                ref={firstField}
+                type="text"
+                inputMode="email"
+                value={username}
+                placeholder="your.name@bechtel.com"
+                autoComplete="username"
+                onChange={(e) => setUsername(e.target.value)}
+              />
             </div>
             <div className="field">
               <label>Password</label>

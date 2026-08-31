@@ -22,7 +22,7 @@ export function subRefs(item) {
   return ((item.config || {}).subs || []).map((s) => ({ ref: `${item.ref}_${s[0]}`, part: s[0] }));
 }
 
-export function validateScreen(screen, { answers = {}, name = "" } = {}) {
+export function validateScreen(screen, { answers = {}, name = "", email = "" } = {}) {
   const errs = {};
   if (!screen) return errs;
 
@@ -30,7 +30,10 @@ export function validateScreen(screen, { answers = {}, name = "" } = {}) {
   const need = (ref, msg) => { errs[ref] = msg; };
 
   if (screen.key === "ident") {
+    // The email is also checked against the cohort roster over the API —
+    // see checkEmail() in Assessment.jsx. This only covers "it is blank".
     if (!filled(name)) need("who_name", "Your name is required.");
+    if (!filled(email)) need("who_email", "Your Bechtel email is required.");
     return errs;
   }
 
