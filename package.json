@@ -17,7 +17,8 @@
     "roster:seed": "npm run roster:seed --workspace=server",
     "roster:list": "npm run roster:list --workspace=server",
     "roster:admin": "npm run roster:admin --workspace=server --",
-    "roster:revoke": "npm run roster:revoke --workspace=server --"
+    "roster:revoke": "npm run roster:revoke --workspace=server --",
+    "roster:passwords": "npm run roster:passwords --workspace=server --"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

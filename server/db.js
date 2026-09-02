@@ -158,6 +158,19 @@ const SCHEMA = [
       created_at   INTEGER NOT NULL
    )`,
 
+  // Exactly one live login per account. The UNIQUE constraint on `subject`
+  // is what enforces "one active session at a time": a new login deletes the
+  // previous row, and the displaced browser's cookie stops resolving.
+  `CREATE TABLE IF NOT EXISTS auth_sessions (
+      id           TEXT    PRIMARY KEY,
+      subject      TEXT    NOT NULL UNIQUE,
+      kind         TEXT    NOT NULL CHECK (kind IN ('participant','admin')),
+      created_at   INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      expires_at   INTEGER NOT NULL,
+      user_agent   TEXT    NOT NULL DEFAULT ''
+   )`,
+
   // Small key/value store. Holds the admin session signing secret, so no
   // environment variable is needed for admin access at all.
   `CREATE TABLE IF NOT EXISTS settings (
@@ -173,6 +186,16 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_attempts_person   ON attempts (participant_key, phase)`,
   `CREATE INDEX IF NOT EXISTS idx_attempts_done     ON attempts (completed_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_roster_email      ON roster (email)`,
+  `CREATE INDEX IF NOT EXISTS idx_auth_subject       ON auth_sessions (subject)`,
+];
+
+// Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
+// add them to an existing table, so they are applied separately and ignored
+// when already present.
+const MIGRATIONS = [
+  `ALTER TABLE roster ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE roster ADD COLUMN password_set_at INTEGER`,
+  `ALTER TABLE roster ADD COLUMN last_login_at INTEGER`,
 ];
 
 // Turso is a network hop, and the connection occasionally times out for a few
@@ -201,6 +224,15 @@ async function withRetry(fn, { attempts = 4, delayMs = 1200 } = {}) {
 
 async function initDB() {
   await withRetry(() => client.batch(SCHEMA.map((sql) => ({ sql })), "deferred"));
+  // Applied one at a time: "duplicate column" is the expected outcome on an
+  // already-migrated database and must not abort the rest.
+  for (const sql of MIGRATIONS) {
+    try {
+      await client.execute(sql);
+    } catch (e) {
+      if (!/duplicate column|already exists/i.test(String(e && e.message))) throw e;
+    }
+  }
 }
 
 /** Lowercased, whitespace-collapsed name — the pre↔post linkage key. */
@@ -553,6 +585,9 @@ async function getRosterEntry(email) {
     email: r.email,
     role: r.role,
     displayName: r.display_name,
+    passwordHash: r.password_hash || "",
+    passwordSetAt: r.password_set_at == null ? null : Number(r.password_set_at),
+    lastLoginAt: r.last_login_at == null ? null : Number(r.last_login_at),
     createdAt: Number(r.created_at),
   };
 }
@@ -566,6 +601,9 @@ async function listRoster() {
     email: r.email,
     role: r.role,
     displayName: r.display_name,
+    passwordHash: r.password_hash || "",
+    passwordSetAt: r.password_set_at == null ? null : Number(r.password_set_at),
+    lastLoginAt: r.last_login_at == null ? null : Number(r.last_login_at),
     createdAt: Number(r.created_at),
   }));
 }
@@ -593,6 +631,87 @@ async function deactivateRosterExcept(emails) {
     sql: `UPDATE roster SET is_active = 0
            WHERE is_active = 1 ${keep.length ? `AND email NOT IN (${placeholders})` : ""}`,
     args: keep,
+  }));
+}
+
+/** Store a password hash against a roster entry. */
+async function setRosterPassword(email, passwordHash) {
+  await withRetry(() => client.execute({
+    sql: `UPDATE roster SET password_hash = ?, password_set_at = ? WHERE email = ?`,
+    args: [passwordHash, Date.now(), normEmail(email)],
+  }));
+}
+
+async function touchRosterLogin(email) {
+  await withRetry(() => client.execute({
+    sql: `UPDATE roster SET last_login_at = ? WHERE email = ?`,
+    args: [Date.now(), normEmail(email)],
+  }));
+}
+
+// ---- Auth sessions (one per account) ---------------------------
+
+/**
+ * Start a session, replacing any existing one for this subject.
+ * Returns the new session id. The delete-then-insert is what makes a second
+ * login anywhere else invalidate the first.
+ */
+async function startAuthSession({ id, subject, kind, expiresAt, userAgent = "" }) {
+  const now = Date.now();
+  await withRetry(() => client.batch([
+    { sql: `DELETE FROM auth_sessions WHERE subject = ?`, args: [subject] },
+    {
+      sql: `INSERT INTO auth_sessions (id, subject, kind, created_at, last_seen_at, expires_at, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [id, subject, kind, now, now, expiresAt, String(userAgent || "").slice(0, 200)],
+    },
+  ], "write"));
+  return id;
+}
+
+/** The live session with this id, or null if it was replaced, ended or expired. */
+async function getAuthSession(id) {
+  if (!id) return null;
+  const { rows } = await withRetry(() => client.execute({
+    sql: `SELECT * FROM auth_sessions WHERE id = ?`, args: [id],
+  }));
+  if (!rows[0]) return null;
+  const r = rows[0];
+  if (Number(r.expires_at) < Date.now()) {
+    await endAuthSession(id);
+    return null;
+  }
+  return {
+    id: r.id, subject: r.subject, kind: r.kind,
+    createdAt: Number(r.created_at), lastSeenAt: Number(r.last_seen_at),
+    expiresAt: Number(r.expires_at), userAgent: r.user_agent,
+  };
+}
+
+async function touchAuthSession(id) {
+  await withRetry(() => client.execute({
+    sql: `UPDATE auth_sessions SET last_seen_at = ? WHERE id = ?`, args: [Date.now(), id],
+  }));
+}
+
+async function endAuthSession(id) {
+  await withRetry(() => client.execute({ sql: `DELETE FROM auth_sessions WHERE id = ?`, args: [id] }));
+}
+
+async function endAuthSessionsFor(subject) {
+  await withRetry(() => client.execute({
+    sql: `DELETE FROM auth_sessions WHERE subject = ?`, args: [subject],
+  }));
+}
+
+async function listAuthSessions() {
+  const { rows } = await withRetry(() => client.execute(
+    `SELECT * FROM auth_sessions ORDER BY last_seen_at DESC`
+  ));
+  return rows.map((r) => ({
+    id: r.id, subject: r.subject, kind: r.kind,
+    createdAt: Number(r.created_at), lastSeenAt: Number(r.last_seen_at),
+    expiresAt: Number(r.expires_at), userAgent: r.user_agent,
   }));
 }
 
@@ -726,6 +845,9 @@ async function deleteSessionById(id) {
 module.exports = {
   client, initDB, withRetry, participantKey, normEmail,
   getRosterEntry, listRoster, upsertRosterEntry, deactivateRosterExcept,
+  setRosterPassword, touchRosterLogin,
+  startAuthSession, getAuthSession, touchAuthSession, endAuthSession,
+  endAuthSessionsFor, listAuthSessions,
   getAdminByUsername, countAdmins, listAdmins, upsertAdmin, deactivateAdmin, touchAdminLogin,
   getSetting, setSetting,
   listSessions, getResponsesByPhase, deleteSessionById,

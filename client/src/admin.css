@@ -329,3 +329,57 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
   border: 1px solid var(--line); border-radius: 2px; padding: 1px 5px; white-space: nowrap;
 }
+
+/* =====================================================================
+   PARTICIPANT SIGN-IN
+   ===================================================================== */
+
+.login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 40px 20px; background: var(--ground);
+}
+.login-card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 5px;
+  padding: 40px 44px 34px; width: 100%; max-width: 480px;
+  box-shadow: 0 10px 40px rgba(18, 48, 63, .08);
+}
+.login-logo {
+  height: 30px; width: auto; display: block; margin-bottom: 26px;
+  /* the mark is white, so it needs a dark chip to sit on */
+  background: var(--ink); padding: 8px 12px; border-radius: 3px;
+}
+.login-card h1 { font-size: 27px; line-height: 1.2; margin: 0 0 14px; max-width: none; }
+.login-lead { font-size: 15.5px; color: var(--ink-2); margin: 0 0 24px; line-height: 1.55; }
+.login-card .field { margin-bottom: 18px; }
+.login-card .field > label { font-size: 14.5px; margin-bottom: 6px; }
+.login-btn { width: 100%; margin-top: 6px; }
+.login-notice {
+  border-left: 4px solid var(--run); background: #FBF6EC; padding: 13px 16px;
+  margin: 0 0 20px; font-size: 14.5px; color: #6E5011; line-height: 1.5; border-radius: 0 3px 3px 0;
+}
+.login-foot {
+  margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+}
+.login-foot p { font-size: 13px; color: var(--ink-3); margin: 0; max-width: 30ch; line-height: 1.45; }
+.login-admin-link {
+  background: transparent; border: 1px solid var(--line); border-radius: 3px;
+  padding: 8px 14px; font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer;
+  white-space: nowrap;
+}
+.login-admin-link:hover { background: var(--ground); color: var(--ink); }
+
+/* who you are signed in as, on the identity screen */
+.signed-in-as {
+  font-family: var(--mono); font-size: 15px; color: var(--ink);
+  background: var(--ground); border: 1px solid var(--line); border-radius: 3px;
+  padding: 13px 16px;
+}
+
+/* sign out, in the assessment sidebar */
+.rail-signout {
+  width: 100%; background: transparent; color: var(--ink-3);
+  border: 1px solid var(--line); border-radius: 3px; padding: 9px 14px;
+  font: inherit; font-size: 13px; cursor: pointer; text-align: left; margin-bottom: 8px;
+}
+.rail-signout:hover { background: var(--surface); color: var(--block); border-color: var(--block); }

@@ -104,14 +104,14 @@ function Confidence({ name, choices, value, onChange }) {
   );
 }
 
-export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
+export default function Assessment({ participant, admin, onAdminSignedIn, onOpenAdmin, onSignOut, onSessionEnded }) {
   const [phase, setPhase] = useState("pre");
   const [assessment, setAssessment] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [idx, setIdx] = useState(0);
   const [answers, setAnswers] = useState({});
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState((participant && participant.email) || "");
   const [elapsed, setElapsed] = useState(0);
   const [toast, setToast] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -120,8 +120,8 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   const [resumeBlocked, setResumeBlocked] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
-  // Roster check: null = not checked, "checking", "ok", or an error message.
-  const [emailState, setEmailState] = useState(null);
+  // Authentication already proved the address, so nothing to check here.
+  const [emailState, setEmailState] = useState("ok");
 
   const startedAt = useRef(Date.now());
   const stageTimes = useRef({});
@@ -148,7 +148,13 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   useEffect(() => {
     if (!assessment || restored) return;
     (async () => {
-      const { ok, data: saved } = await api.getSession();
+      const { ok, data: saved, code } = await api.getSession();
+      if (code === "session_replaced" || code === "unauthenticated") {
+        if (onSessionEnded) onSessionEnded(code === "session_replaced"
+          ? "Your account was signed in on another device, so this session ended."
+          : "Please sign in again.");
+        return;
+      }
       if (!ok) {
         // The read failed. Stay read-only rather than risk clobbering a saved
         // sitting with an empty one.
@@ -180,30 +186,6 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
   const stage = screen && screen.stage;
   const nameOk = hasContent(name);
   const emailOk = emailState === "ok";
-
-  // Re-checking is required whenever the address changes.
-  const onEmailChange = (v) => {
-    setEmail(v);
-    setEmailState(null);
-  };
-
-  /**
-   * Verify the address against the cohort roster. Runs on Continue and on
-   * blur, so someone is told immediately rather than after 45 minutes.
-   */
-  async function checkEmail() {
-    const value = cleanText(email);
-    if (!value) { setEmailState("An email address is required."); return false; }
-    setEmailState("checking");
-    const res = await api.verifyParticipant(value);
-    if (res.ok) {
-      setEmail(res.email);        // store the roster's canonical spelling
-      setEmailState("ok");
-      return true;
-    }
-    setEmailState(res.error || "This email is not registered for this assessment.");
-    return false;
-  }
 
   // ---- persist -----------------------------------------------------
 
@@ -253,10 +235,9 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
     onAdminSignedIn(who);
   }, [onAdminSignedIn]);
 
-  /** Name, then a roster-checked email, then on to the assessment. */
-  async function identContinue() {
+  /** Only the name is asked for now — the email came from signing in. */
+  function identContinue() {
     if (!nameOk) { setShowErrors(true); return; }
-    if (!emailOk && !(await checkEmail())) { setShowErrors(true); return; }
     setShowErrors(false);
     go(idx + 1);
   }
@@ -400,6 +381,10 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
     const res = await api.submitAttempt(payload);
     setSubmitting(false);
     if (res.error) {
+      if (res.code === "session_replaced" || res.code === "unauthenticated") {
+        if (onSessionEnded) onSessionEnded(res.error);
+        return;
+      }
       setToast(res.error);
       // An address the roster will not accept can only be fixed on the
       // identity screen — including an admin address, which cannot sit the
@@ -941,24 +926,8 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
           />
         </div>
         <div className="field">
-          <label>Work email <span className="req">required</span></label>
-          <input
-            type="text"
-            inputMode="email"
-            value={email}
-            placeholder="your.name@bechtel.com"
-            autoComplete="email"
-            aria-required="true"
-            aria-invalid={!!(emailState && emailState !== "ok" && emailState !== "checking")}
-            onChange={(e) => onEmailChange(e.target.value)}
-            onBlur={() => { if (hasContent(email) && emailState === null) checkEmail(); }}
-            onKeyDown={(e) => { if (e.key === "Enter") identContinue(); }}
-          />
-          {emailState === "checking" && <div className="field-note">Checking…</div>}
-          {emailState === "ok" && <div className="field-ok">Registered — you can continue.</div>}
-          {emailState && emailState !== "ok" && emailState !== "checking" && (
-            <div className="field-err" data-err>{emailState}</div>
-          )}
+          <label>Signed in as</label>
+          <div className="signed-in-as">{email}</div>
         </div>
         {c.identNote && (
           <div className="note">
@@ -972,10 +941,7 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
             {emailState === "checking" ? "Checking…" : "Continue"}
           </button>
           <span className="navnote">
-            {!nameOk ? "your name is required to continue"
-              : !hasContent(email) ? "your Bechtel email is required to continue"
-              : emailOk ? "answers are kept as you go"
-              : "we need to check your email before you start"}
+            {nameOk ? "answers are kept as you go" : "your name is required to continue"}
           </span>
         </div>
       </>
@@ -1060,6 +1026,9 @@ export default function Assessment({ admin, onAdminSignedIn, onOpenAdmin }) {
         </div>
 
         <div className="rail-admin">
+          {onSignOut && (
+            <button className="rail-signout" onClick={onSignOut}>Sign out</button>
+          )}
           {admin ? (
             <button className="rail-admin-btn signed-in" onClick={onOpenAdmin}>
               Open admin dashboard

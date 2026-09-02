@@ -41,8 +41,17 @@ router.post("/login", async (req, res, next) => {
       return res.status(401).json({ error: "incorrect username or password" });
     }
 
+    // One live admin session per account: this replaces any previous one, so
+    // signing in elsewhere ends the earlier session immediately.
+    const sid = auth.newSessionId();
+    const expiresAt = Date.now() + auth.SESSION_HOURS * 3600 * 1000;
+    await db.startAuthSession({
+      id: sid, subject: admin.username, kind: "admin",
+      expiresAt, userAgent: req.get("user-agent") || "",
+    });
+
     const token = auth.signToken(
-      { sub: admin.username, name: admin.displayName, exp: Date.now() + auth.SESSION_HOURS * 3600 * 1000 },
+      { sid, sub: admin.username, name: admin.displayName, exp: expiresAt },
       await auth.sessionSecret()
     );
     auth.setSessionCookie(res, token);
@@ -51,9 +60,14 @@ router.post("/login", async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-router.post("/logout", (_req, res) => {
-  auth.clearSessionCookie(res);
-  res.json({ ok: true });
+router.post("/logout", async (req, res, next) => {
+  try {
+    const token = auth.parseCookies(req)[auth.COOKIE_NAME];
+    const signed = auth.verifyToken(token, await auth.sessionSecret());
+    if (signed && signed.sid) await db.endAuthSession(signed.sid);
+    auth.clearSessionCookie(res);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 router.get("/me", async (req, res, next) => {
@@ -62,9 +76,17 @@ router.get("/me", async (req, res, next) => {
       return res.status(503).json({ error: "no admin account exists yet", code: "not_configured" });
     }
     const token = auth.parseCookies(req)[auth.COOKIE_NAME];
-    const session = auth.verifyToken(token, await auth.sessionSecret());
-    if (!session) return res.status(401).json({ error: "not signed in", code: "unauthenticated" });
-    res.json({ ok: true, username: session.sub, displayName: session.name || "", expiresAt: session.exp });
+    const signed = auth.verifyToken(token, await auth.sessionSecret());
+    if (!signed) return res.status(401).json({ error: "not signed in", code: "unauthenticated" });
+
+    const live = signed.sid ? await db.getAuthSession(signed.sid) : null;
+    if (!live || live.subject !== signed.sub) {
+      return res.status(401).json({
+        error: "This account was signed in on another device or browser, so this session ended.",
+        code: "session_replaced",
+      });
+    }
+    res.json({ ok: true, username: signed.sub, displayName: signed.name || "", expiresAt: signed.exp });
   } catch (e) { next(e); }
 });
 

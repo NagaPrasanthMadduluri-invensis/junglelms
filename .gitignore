@@ -5,3 +5,7 @@ dist/
 *.db-wal
 .env
 .DS_Store
+
+# Generated credential sheets — live passwords, never commit
+credentials/
+*.xlsx

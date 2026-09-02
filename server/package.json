@@ -13,7 +13,8 @@
     "roster:seed": "node roster.js",
     "roster:list": "node roster.js --list",
     "roster:admin": "node roster.js --admin",
-    "roster:revoke": "node roster.js --revoke"
+    "roster:revoke": "node roster.js --revoke",
+    "roster:passwords": "node passwords.js"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",

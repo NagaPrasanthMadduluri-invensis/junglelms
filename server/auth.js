@@ -16,8 +16,53 @@ const db = require("./db");
 // (which is what keeps this working on serverless).
 // =====================================================================
 
-const COOKIE_NAME = "jl_admin";
+const COOKIE_NAME = "jl_admin";          // admin dashboard
+const PARTICIPANT_COOKIE = "bx_session"; // assessment participant
 const SESSION_HOURS = 12;
+const PARTICIPANT_SESSION_HOURS = 8;
+
+const crypto2 = require("crypto");
+
+/** Opaque, unguessable session id, stored server-side in auth_sessions. */
+function newSessionId() {
+  return crypto2.randomBytes(24).toString("base64url");
+}
+
+// =====================================================================
+// PASSWORD GENERATION
+//
+// Ambiguous characters are excluded on purpose: these passwords are read off
+// a spreadsheet and typed by hand, so 0/O, 1/l/I and similar cause support
+// calls. Every class is guaranteed present, and the result is shuffled with
+// a CSPRNG rather than Math.random.
+// =====================================================================
+
+const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";   // no I, O
+const LOWER = "abcdefghijkmnopqrstuvwxyz";   // no l
+const DIGIT = "23456789";                    // no 0, 1
+const SYMBOL = "!#$%&*+-=?@";                // shell- and CSV-safe enough
+
+/** Uniform random integer in [0, max) with no modulo bias. */
+function randomInt(max) {
+  const limit = Math.floor(0xffffffff / max) * max;
+  let x;
+  do { x = crypto2.randomBytes(4).readUInt32BE(0); } while (x >= limit);
+  return x % max;
+}
+
+const pick = (set) => set[randomInt(set.length)];
+
+function generatePassword(length = 14) {
+  const pool = UPPER + LOWER + DIGIT + SYMBOL;
+  const chars = [pick(UPPER), pick(LOWER), pick(DIGIT), pick(SYMBOL)];
+  while (chars.length < length) chars.push(pick(pool));
+  // Fisher-Yates with a CSPRNG, so the guaranteed classes are not positional.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
 
 // ---- password hashing ------------------------------------------
 
@@ -92,16 +137,33 @@ function parseCookies(req) {
   return out;
 }
 
-function setSessionCookie(res, token) {
+function cookieString(name, value, maxAgeSeconds) {
   const secure = process.env.NODE_ENV === "production" ? " Secure;" : "";
-  res.setHeader("Set-Cookie",
-    `${COOKIE_NAME}=${token}; HttpOnly;${secure} Path=/; SameSite=Lax; Max-Age=${SESSION_HOURS * 3600}`);
+  return `${name}=${value}; HttpOnly;${secure} Path=/; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+// Several cookies may need setting on one response, so append rather than
+// overwrite — res.setHeader would discard a previously set cookie.
+function appendCookie(res, value) {
+  const existing = res.getHeader("Set-Cookie");
+  if (!existing) res.setHeader("Set-Cookie", value);
+  else res.setHeader("Set-Cookie", [].concat(existing, value));
+}
+
+function setSessionCookie(res, token) {
+  appendCookie(res, cookieString(COOKIE_NAME, token, SESSION_HOURS * 3600));
 }
 
 function clearSessionCookie(res) {
-  const secure = process.env.NODE_ENV === "production" ? " Secure;" : "";
-  res.setHeader("Set-Cookie",
-    `${COOKIE_NAME}=; HttpOnly;${secure} Path=/; SameSite=Lax; Max-Age=0`);
+  appendCookie(res, cookieString(COOKIE_NAME, "", 0));
+}
+
+function setParticipantCookie(res, token) {
+  appendCookie(res, cookieString(PARTICIPANT_COOKIE, token, PARTICIPANT_SESSION_HOURS * 3600));
+}
+
+function clearParticipantCookie(res) {
+  appendCookie(res, cookieString(PARTICIPANT_COOKIE, "", 0));
 }
 
 // ---- signing secret --------------------------------------------
@@ -138,15 +200,61 @@ async function adminOnly(req, res, next) {
       });
     }
     const token = parseCookies(req)[COOKIE_NAME];
-    const session = verifyToken(token, await sessionSecret());
-    if (!session) return res.status(401).json({ error: "not signed in", code: "unauthenticated" });
-    req.admin = session;
+    const signed = verifyToken(token, await sessionSecret());
+    if (!signed) return res.status(401).json({ error: "not signed in", code: "unauthenticated" });
+
+    // A valid signature is not enough: the session must still be the live one
+    // for this account. If it is gone, someone signed in elsewhere.
+    const live = signed.sid ? await db.getAuthSession(signed.sid) : null;
+    if (!live || live.subject !== signed.sub) {
+      return res.status(401).json({
+        error: "This account was signed in on another device or browser, so this session ended.",
+        code: "session_replaced",
+      });
+    }
+    await db.touchAuthSession(live.id);
+    req.admin = signed;
+    req.authSession = live;
+    next();
+  } catch (e) { next(e); }
+}
+
+/**
+ * Require a signed-in participant. Same single-session rule as the admin:
+ * the signature must verify AND the session must still be the live one.
+ */
+async function participantOnly(req, res, next) {
+  try {
+    const token = parseCookies(req)[PARTICIPANT_COOKIE];
+    const signed = verifyToken(token, await sessionSecret());
+    if (!signed) return res.status(401).json({ error: "Please sign in to continue.", code: "unauthenticated" });
+
+    const live = signed.sid ? await db.getAuthSession(signed.sid) : null;
+    if (!live || live.subject !== signed.sub) {
+      return res.status(401).json({
+        error: "Your account was signed in on another device or browser, so this session ended.",
+        code: "session_replaced",
+      });
+    }
+
+    // Roster membership is re-checked on every request, so revoking someone
+    // takes effect immediately rather than at their next login.
+    const entry = await db.getRosterEntry(signed.sub);
+    if (!entry || entry.role !== "participant") {
+      await db.endAuthSession(live.id);
+      return res.status(403).json({ error: "This account can no longer take the assessment.", code: "not_registered" });
+    }
+
+    await db.touchAuthSession(live.id);
+    req.participant = { email: entry.email, role: entry.role, sessionId: live.id };
     next();
   } catch (e) { next(e); }
 }
 
 module.exports = {
-  COOKIE_NAME, SESSION_HOURS,
+  COOKIE_NAME, PARTICIPANT_COOKIE, SESSION_HOURS, PARTICIPANT_SESSION_HOURS,
+  newSessionId, generatePassword,
+  setParticipantCookie, clearParticipantCookie, participantOnly,
   hashPassword, verifyPassword,
   signToken, verifyToken,
   parseCookies, setSessionCookie, clearSessionCookie,

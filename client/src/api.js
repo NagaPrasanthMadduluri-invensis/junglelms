@@ -16,11 +16,14 @@ function getSessionId() {
 
 async function request(url, opts = {}) {
   const res = await fetch(url, {
+    credentials: "include",   // the session lives in an httpOnly cookie
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) return { error: body.error || `${res.status} ${res.statusText}`, ...body };
+  if (!res.ok) {
+    return { error: body.error || `${res.status} ${res.statusText}`, status: res.status, ...body };
+  }
   return body;
 }
 
@@ -36,15 +39,22 @@ export const api = {
     return request("/api/assessments");
   },
 
-  /**
-   * Is this email registered for the assessment?
-   * Returns { ok:true, email, role } or { ok:false, error }.
-   */
-  verifyParticipant(email) {
-    return request("/api/participant/verify", {
+  // ---- Authentication ------------------------------------------
+
+  login(email, password) {
+    return request("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, password }),
     });
+  },
+
+  logout() {
+    return request("/api/auth/logout", { method: "POST" });
+  },
+
+  /** Who is signed in, if anyone. */
+  me() {
+    return request("/api/auth/me");
   },
 
   // ---- Session (resume) ----------------------------------------
@@ -56,7 +66,7 @@ export const api = {
    */
   async getSession() {
     const res = await request(`/api/session/${getSessionId()}`);
-    if (res.error) return { ok: false, data: null };
+    if (res.error) return { ok: false, data: null, code: res.code, error: res.error };
     return { ok: true, data: res.data };
   },
 

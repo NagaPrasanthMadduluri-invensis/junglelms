@@ -5,6 +5,7 @@ const db = require("./db");
 const { scoreAttempt, checkCompleteness } = require("./scoring");
 const adminRoutes = require("./admin-routes");
 const { cleanAnswers } = require("./sanitize");
+const auth = require("./auth");
 
 const app = express();
 
@@ -105,6 +106,70 @@ const NOT_REGISTERED =
 const ADMIN_ACCOUNT =
   "This is an administrator account. Use “Log in as admin” at the bottom of the sidebar to open the dashboard.";
 
+// =====================================================================
+// PARTICIPANT AUTHENTICATION
+//
+// Email + password against the roster. Exactly one live session per account:
+// signing in anywhere else ends the previous session immediately.
+// =====================================================================
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+app.post("/api/auth/login", async (req, res, next) => {
+  try {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+      return res.status(400).json({ error: "Enter your email and password." });
+    }
+
+    const entry = await db.getRosterEntry(email);
+
+    // Point an admin at the right door before checking a password they were
+    // never issued here. Their role is already on the credentials sheet, so
+    // this reveals nothing, and the alternative is a misleading
+    // "incorrect password" for a correct password.
+    if (entry && entry.role === "admin") {
+      return res.status(403).json({ error: ADMIN_ACCOUNT, code: "admin_account" });
+    }
+
+    // Hash regardless, so a missing account and a wrong password take the
+    // same time and cannot be told apart.
+    const hash = entry && entry.passwordHash ? entry.passwordHash : auth.hashPassword("no-such-account");
+    const passwordOk = auth.verifyPassword(String(password), hash);
+
+    if (!entry || !entry.passwordHash || !passwordOk) {
+      await sleep(400);
+      return res.status(401).json({ error: "Incorrect email or password.", code: "bad_credentials" });
+    }
+
+    const sid = auth.newSessionId();
+    const expiresAt = Date.now() + auth.PARTICIPANT_SESSION_HOURS * 3600 * 1000;
+    // Replaces any existing session for this account.
+    await db.startAuthSession({
+      id: sid, subject: entry.email, kind: "participant",
+      expiresAt, userAgent: req.get("user-agent") || "",
+    });
+    await db.touchRosterLogin(entry.email);
+
+    auth.setParticipantCookie(res, auth.signToken({ sid, sub: entry.email, kind: "participant", exp: expiresAt }, await auth.sessionSecret()));
+    res.json({ ok: true, email: entry.email, expiresAt });
+  } catch (e) { next(e); }
+});
+
+app.post("/api/auth/logout", async (req, res, next) => {
+  try {
+    const token = auth.parseCookies(req)[auth.PARTICIPANT_COOKIE];
+    const signed = auth.verifyToken(token, await auth.sessionSecret());
+    if (signed && signed.sid) await db.endAuthSession(signed.sid);
+    auth.clearParticipantCookie(res);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.get("/api/auth/me", auth.participantOnly, (req, res) => {
+  res.json({ ok: true, email: req.participant.email });
+});
+
 /**
  * Is this email allowed to take the assessment?
  *
@@ -128,36 +193,25 @@ app.post("/api/participant/verify", async (req, res, next) => {
 
 // ---- Sessions --------------------------------------------------
 
-app.get("/api/session/:id", async (req, res, next) => {
+app.get("/api/session/:id", auth.participantOnly, async (req, res, next) => {
   try {
     res.json({ data: await db.getSession(req.params.id) });
   } catch (e) { next(e); }
 });
 
-app.put("/api/session/:id", async (req, res, next) => {
+app.put("/api/session/:id", auth.participantOnly, async (req, res, next) => {
   try {
     if (!req.body || typeof req.body !== "object")
       return res.status(400).json({ error: "body must be a JSON object" });
 
-    // An in-progress sitting is only stored once the roster has accepted the
-    // participant. Without this, anyone who typed a name on the identity
-    // screen was written to the database and then appeared on the dashboard,
-    // whether or not their email was ever registered.
-    const email = (req.body.email || "").trim();
-    if (!email) {
-      return res.status(403).json({ error: "an email is required before progress can be saved", code: "no_email" });
-    }
-    const entry = await db.getRosterEntry(email);
-    if (!entry) return res.status(403).json({ error: NOT_REGISTERED, code: "not_registered" });
-    if (entry.role === "admin") return res.status(403).json({ error: ADMIN_ACCOUNT, code: "admin_account" });
-
-    // Store the roster's canonical spelling, never the typed casing.
-    await db.setSession(req.params.id, { ...req.body, email: entry.email });
+    // The email comes from the authenticated session, never from the body,
+    // so a client cannot store progress against somebody else.
+    await db.setSession(req.params.id, { ...req.body, email: req.participant.email });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 
-app.delete("/api/session/:id", async (req, res, next) => {
+app.delete("/api/session/:id", auth.participantOnly, async (req, res, next) => {
   try {
     await db.deleteSession(req.params.id);
     res.json({ ok: true });
@@ -207,7 +261,7 @@ app.get("/api/participant/:name/status", reviewerOnly, async (req, res, next) =>
  * Only discriminator items are auto-scored, against the key held in the
  * database. Nothing computes a composite score.
  */
-app.post("/api/attempts", async (req, res, next) => {
+app.post("/api/attempts", auth.participantOnly, async (req, res, next) => {
   try {
     const { participantName, participantEmail, phase, answers: rawAnswers, stageTimes, startedAt } = req.body || {};
 
@@ -221,16 +275,9 @@ app.post("/api/attempts", async (req, res, next) => {
     if (!["pre", "post"].includes(phase))
       return res.status(400).json({ error: 'phase must be "pre" or "post"' });
 
-    // The roster is the gate. The identity screen checks this too, but a
-    // submission must never be accepted from an address that is not on it.
-    if (!participantEmail || !String(participantEmail).trim())
-      return res.status(400).json({ error: "participantEmail is required" });
-
-    const rosterEntry = await db.getRosterEntry(participantEmail);
-    if (!rosterEntry)
-      return res.status(403).json({ error: NOT_REGISTERED, code: "not_registered" });
-    if (rosterEntry.role === "admin")
-      return res.status(403).json({ error: ADMIN_ACCOUNT, code: "admin_account" });
+    // Identity comes from the session, not the request body — participantOnly
+    // has already confirmed they are a registered participant.
+    const rosterEntry = { email: req.participant.email };
     if (!rawAnswers || typeof rawAnswers !== "object")
       return res.status(400).json({ error: "answers must be an object keyed by item ref" });
 
@@ -308,6 +355,13 @@ app.post("/api/attempts", async (req, res, next) => {
 // ---- Errors ----------------------------------------------------
 
 app.use((err, _req, res, _next) => {
+  // A malformed request body is the caller's fault, not a server fault.
+  if (err && (err.type === "entity.parse.failed" || err.status === 400 || err.statusCode === 400)) {
+    return res.status(400).json({ error: "The request body was not valid JSON." });
+  }
+  if (err && (err.type === "entity.too.large" || err.status === 413)) {
+    return res.status(413).json({ error: "That submission is too large." });
+  }
   console.error(err);
   const text = `${err && err.message} ${err && err.code}`;
   if (/timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN|fetch failed/i.test(text)) {
