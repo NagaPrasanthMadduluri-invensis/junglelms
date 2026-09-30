@@ -142,7 +142,9 @@ function Confidence({ name, choices, value, onChange }) {
 }
 
 export default function Assessment({ participant, admin, onAdminSignedIn, onOpenAdmin, onSignOut, onSessionEnded }) {
-  const [phase, setPhase] = useState("pre");
+  // Null until the server says which phase this cohort is sitting. Nothing
+  // loads before then, so a participant never briefly sees the wrong one.
+  const [phase, setPhase] = useState(null);
   const [assessment, setAssessment] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [idx, setIdx] = useState(0);
@@ -168,7 +170,18 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
 
   // ---- load content ------------------------------------------------
 
+  // Ask the server which phase to serve, once.
   useEffect(() => {
+    let live = true;
+    api.participantPhase().then((res) => {
+      if (!live) return;
+      setPhase(res.error ? "pre" : res.phase);
+    });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!phase) return;
     let live = true;
     setAssessment(null);
     setLoadError(null);
@@ -1200,17 +1213,13 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
           <p className="eyebrow">Not available</p>
           <h1>The {phase} assessment is not open yet</h1>
           <p className="lead">{loadError}</p>
-          {phase === "post" && (
-            <div className="nav">
-              <button className="btn" onClick={() => setPhase("pre")}>Go to the pre-assessment</button>
-            </div>
-          )}
+
         </main>
       </div>
     );
   }
 
-  if (!assessment) {
+  if (!phase || !assessment) {
     return (
       <div className="shell" style={{ gridTemplateColumns: "1fr" }}>
         <main><p className="lead">Loading…</p></main>

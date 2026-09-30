@@ -30,6 +30,11 @@ async function request(url, opts = {}) {
 export const api = {
   // ---- Assessment content --------------------------------------
 
+  /** Which phase this cohort is sitting right now — decided server-side. */
+  participantPhase() {
+    return request("/api/participant/phase");
+  },
+
   /** Returns { assessment } or { error }. */
   getAssessment(phase) {
     return request(`/api/assessment/${phase}`);

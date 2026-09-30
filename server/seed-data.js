@@ -1639,8 +1639,7 @@ module.exports = [
         "What you have done since. Not scored.",
         "See what is unanswered, then submit."
       ],
-      "identLead": "Needed so your answers can be set against your own pre-assessment, and nothing else.",
-      "identNote": "Use the same name you gave on the pre-assessment, so the two sittings can be read together."
+      "identLead": "Needed so your answers can be set against your own pre-assessment, and nothing else."
     },
     "stages": [
       {
@@ -1907,7 +1906,7 @@ module.exports = [
             "ref": "sm_free",
             "kind": "text",
             "stem": "Optional: one statement on this list you still would not want to do in front of colleagues, and what would change that.",
-            "hint": "Optional. The second half of the question is the useful half.",
+            "hint": "Optional.",
             "config": {
               "rows": 3,
               "optional": true
@@ -1924,7 +1923,7 @@ module.exports = [
         "name": "Discriminators",
         "meta": "18 min · 16 items",
         "copy": {
-          "multiHint": "Select all that apply. Scoring is (correct − incorrect) ÷ number correct, floored at zero — so selecting everything is not a strategy, and neither is selecting one safe option."
+          "multiHint": "Select all that apply. Scoring is (correct − incorrect) ÷ number correct, floored at zero, so selecting everything is not a strategy, and neither is selecting one safe option."
         },
         "items": [
           {
@@ -3221,9 +3220,7 @@ module.exports = [
         "onePerScreen": true,
         "name": "Artefact forensics",
         "meta": "20 min · 3 items",
-        "copy": {
-          "lead": "Find what is wrong, including what is not there at all, then write the fix. Bullet points are fine except where a part asks you to write it out. Precision beats completeness."
-        },
+        "copy": {},
         "items": [
           {
             "ref": "F1",
@@ -3769,14 +3766,13 @@ module.exports = [
         "kind": "review",
         "scored": false,
         "name": "Check and submit",
-        "meta": "—",
+        "meta": "–",
         "copy": {
           "h1": "Check and submit",
           "leadIncomplete": "Some things are unanswered. That is allowed, and a blank is read as a blank rather than as a wrong answer. Fill anything you want to fill, then submit.",
           "leadComplete": "Everything is answered. No score is calculated here and none will be shown to you.",
           "whatNext": [
-            "Your answers are read against your own pre-assessment, stage by stage, by the same trainer who read it.",
-            "Nobody is ranked against anybody else, and no single score is calculated from any of this."
+            "Your answers are read against your own pre-assessment, stage by stage, by the same trainer who read it."
           ]
         },
         "items": []

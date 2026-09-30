@@ -66,6 +66,23 @@ app.get("/api/assessments", async (_req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Which phase a participant is sent to when they sign in.
+//
+// Held in the database, not in the client, so the cohort can be moved from
+// the pre to the post without a redeploy — and so everyone moves at once
+// rather than depending on what each browser happens to have cached.
+// Falls back to whichever phase is seeded if the setting is missing.
+app.get("/api/participant/phase", async (_req, res, next) => {
+  try {
+    const stored = await db.getSetting("participant_phase");
+    const seeded = (await db.listAssessments()).filter((a) => a.stageCount > 0).map((a) => a.phase);
+    const phase = stored && seeded.includes(stored)
+      ? stored
+      : (seeded.includes("post") ? "post" : seeded[0] || "pre");
+    res.json({ phase, seeded });
+  } catch (e) { next(e); }
+});
+
 // Participant view: no is_key / is_neutral flags, no rubrics.
 app.get("/api/assessment/:phase", async (req, res, next) => {
   try {
