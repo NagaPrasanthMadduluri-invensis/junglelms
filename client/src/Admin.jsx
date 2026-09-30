@@ -440,35 +440,77 @@ function ParticipantView({ id, onBack }) {
 // COMPARISON
 // =====================================================================
 
+/** A pre → post cell: the two scores, with the movement carrying the colour. */
+function Move({ pre, post, change, suffix = "%" }) {
+  if (pre === null || pre === undefined || post === null || post === undefined) {
+    return <td className="num cmp-cell"><span className="cmp-none">—</span></td>;
+  }
+  return (
+    <td className="num cmp-cell">
+      <span className="cmp-pair">{pre}{suffix} <span className="cmp-arrow">→</span> {post}{suffix}</span>
+      <span className={"cmp-delta " + (change > 0 ? "up" : change < 0 ? "down" : "flat")}>
+        {change > 0 ? "+" : ""}{change}
+      </span>
+    </td>
+  );
+}
+
 function Comparison({ comparison }) {
   if (!comparison || !comparison.available) {
     return (
       <div className="admin-panel admin-locked">
         <h2>Pre → post comparison</h2>
         <p>
-          This opens once the post-assessment is live and the same people have taken it.
-          Participants are matched by name across the two phases.
+          This opens once the same people have submitted both phases. They are
+          matched on the email they signed in with, so the name each person
+          types does not have to match between the two sittings.
         </p>
         <div className="admin-lockrow">
           <span><strong>{comparison ? comparison.preCount : 0}</strong> pre submissions</span>
           <span><strong>{comparison ? comparison.postCount : 0}</strong> post submissions</span>
           <span><strong>{comparison ? comparison.pairedCount : 0}</strong> matched pairs</span>
         </div>
+        {comparison && comparison.onlyPost && comparison.onlyPost.length > 0 && (
+          <p className="admin-note" style={{ marginTop: 12 }}>
+            Sat the post with no pre on record: {comparison.onlyPost.join(", ")}
+          </p>
+        )}
+        {comparison && comparison.onlyPre && comparison.onlyPre.length > 0 && (
+          <p className="admin-note" style={{ marginTop: 4 }}>
+            Sat the pre, no post yet: {comparison.onlyPre.length} {comparison.onlyPre.length === 1 ? "person" : "people"}.
+          </p>
+        )}
       </div>
     );
   }
 
+  const c = comparison;
+  const dims = c.dimensions || [];
+
   return (
     <>
+      <div className="admin-cards">
+        <Card label="Matched pairs" value={c.pairedCount}
+              sub={`of ${c.preCount} pre and ${c.postCount} post submissions`} />
+        <Card label="Mean movement" value={(c.meanChange > 0 ? "+" : "") + c.meanChange}
+              tone={c.meanChange > 0 ? "pass" : c.meanChange < 0 ? "run" : null}
+              sub="percentage points, averaged over the matched people" />
+        <Card label="Improved" value={c.improved} tone="pass"
+              sub={`${c.unchanged} unchanged · ${c.declined} lower`} />
+      </div>
+
       <div className="admin-panel">
         <h2>Movement by dimension</h2>
-        <p className="admin-note">{comparison.pairedCount} people took both phases.</p>
+        <p className="admin-note">
+          Cohort mean across the {c.pairedCount} {c.pairedCount === 1 ? "person" : "people"} who
+          sat both. Each dimension is scored on its own; nothing is summed into a single score.
+        </p>
         <table className="admin-table">
           <thead>
             <tr><th>Dimension</th><th className="num">Pre</th><th className="num">Post</th><th className="num">Change</th></tr>
           </thead>
           <tbody>
-            {comparison.byDimension.map((d) => (
+            {c.byDimension.map((d) => (
               <tr key={d.dimension}>
                 <td>{d.dimension}</td>
                 <td className="num">{d.preMean}%</td>
@@ -483,28 +525,54 @@ function Comparison({ comparison }) {
       </div>
 
       <div className="admin-panel">
-        <h2>Movement by person</h2>
-        <table className="admin-table">
-          <thead>
-            <tr><th>Name</th><th className="num">Pre</th><th className="num">Post</th><th className="num">Change</th></tr>
-          </thead>
-          <tbody>
-            {comparison.people.map((p) => (
-              <tr key={p.name}>
-                <td>{p.name}</td>
-                <td className="num">{p.preAvg}%</td>
-                <td className="num">{p.postAvg}%</td>
-                <td className={"num " + (p.change > 0 ? "up" : p.change < 0 ? "down" : "")}>
-                  {p.change > 0 ? "+" : ""}{p.change}
-                </td>
+        <h2>Scores by person, pre → post</h2>
+        <p className="admin-note">
+          Every dimension for every matched person. The average is the mean of that
+          person’s dimensions and exists only to order this table — it is not a
+          score anyone is given.
+        </p>
+        <div className="admin-table-wrap">
+          <table className="admin-table cmp-table">
+            <thead>
+              <tr>
+                <th>Person</th>
+                {dims.map((d) => <th key={d} className="num">{d}</th>)}
+                <th className="num">Average</th>
+                <th className="num">Self-rating</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        {comparison.onlyPre && comparison.onlyPre.length > 0 && (
-          <p className="admin-note" style={{ marginTop: 12 }}>
-            Took the pre only, no post yet: {comparison.onlyPre.join(", ")}
-          </p>
+            </thead>
+            <tbody>
+              {c.people.map((p) => (
+                <tr key={p.email || p.name}>
+                  <td>
+                    <div className="cmp-name">{p.name}</div>
+                    {p.email && <div className="cmp-mail">{p.email}</div>}
+                  </td>
+                  {dims.map((d) => {
+                    const cell = p.dimensions.find((x) => x.dimension === d) || {};
+                    return <Move key={d} pre={cell.pre} post={cell.post} change={cell.change} />;
+                  })}
+                  <Move pre={p.preAvg} post={p.postAvg} change={p.change} />
+                  <Move pre={p.selfMap.pre} post={p.selfMap.post} change={p.selfMap.change} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {(c.onlyPre.length > 0 || c.onlyPost.length > 0) && (
+          <div className="admin-note" style={{ marginTop: 14 }}>
+            {c.onlyPre.length > 0 && (
+              <p style={{ margin: "0 0 4px" }}>
+                Pre only, no post yet: {c.onlyPre.join(", ")}
+              </p>
+            )}
+            {c.onlyPost.length > 0 && (
+              <p style={{ margin: 0 }}>
+                Post only, no pre on record: {c.onlyPost.join(", ")}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </>

@@ -319,16 +319,38 @@ function buildComparison(preRows, postRows) {
   // week and "Aryan Banke" the next would silently fail to pair. The name key
   // is kept as a fallback for any attempt recorded without an address.
   const pairKey = (p) => (p.email || "").trim().toLowerCase() || p.key;
-  const preByKey = new Map(preRows.filter((p) => p.state !== "in_progress").map((p) => [pairKey(p), p]));
-  const postByKey = new Map(postRows.filter((p) => p.state !== "in_progress").map((p) => [pairKey(p), p]));
+
+  // Nothing stops someone submitting a phase twice, and both rows are kept.
+  // The rows arrive newest first, so take the first of each key and the
+  // comparison reads the latest sitting — building the Map straight from the
+  // list would have kept the oldest and silently ignored a resubmission.
+  const latestByKey = (rows) => {
+    const out = new Map();
+    for (const p of rows) {
+      if (p.state === "in_progress") continue;
+      const k = pairKey(p);
+      if (!out.has(k)) out.set(k, p);
+    }
+    return out;
+  };
+  const preByKey = latestByKey(preRows);
+  const postByKey = latestByKey(postRows);
   const paired = [...postByKey.keys()].filter((k) => preByKey.has(k));
 
+  const unmatchedPre = [...preByKey.keys()].filter((k) => !postByKey.has(k)).map((k) => preByKey.get(k).name);
+  const unmatchedPost = [...postByKey.keys()].filter((k) => !preByKey.has(k)).map((k) => postByKey.get(k).name);
+
   if (!paired.length) {
+    // Say who is unmatched, not just that nothing matched. "12 pre and 1 post
+    // but no pairs" is otherwise baffling until you notice the one post
+    // sitting belongs to somebody who never sat the pre.
     return {
       available: false,
       preCount: preByKey.size,
       postCount: postByKey.size,
       pairedCount: 0,
+      onlyPre: unmatchedPre,
+      onlyPost: unmatchedPost,
     };
   }
 
@@ -360,10 +382,15 @@ function buildComparison(preRows, postRows) {
       ? Math.round(p.dimensions.reduce((s, d) => s + d.pct, 0) / p.dimensions.length)
       : null;
     const preAvg = avg(a), postAvg = avg(b);
+    const delta = (x, y) => (x === null || y === null ? null : y - x);
     return {
       name: b.name,
+      email: b.email || a.email || "",
       preAvg, postAvg,
-      change: preAvg !== null && postAvg !== null ? postAvg - preAvg : null,
+      change: delta(preAvg, postAvg),
+      // Per dimension, so the tab shows where someone moved rather than only
+      // that they did. The overall average hides a person who gained on
+      // delivery and lost on data.
       dimensions: byDimension.map((d) => {
         const x = a.dimensions.find((y) => y.dimension === d.dimension);
         const y = b.dimensions.find((z) => z.dimension === d.dimension);
@@ -374,15 +401,37 @@ function buildComparison(preRows, postRows) {
           change: x && y ? y.pct - x.pct : null,
         };
       }),
+      // Self-rating beside measured score. Someone whose measured score rises
+      // while their self-rating falls has learnt what the work demands, which
+      // is a different and better result than the number alone suggests.
+      selfMap: {
+        pre: a.selfMapMean,
+        post: b.selfMapMean,
+        change: delta(a.selfMapMean, b.selfMapMean),
+      },
+      // Where the calibration gap went: self-rating minus measured, per phase.
+      calibration: {
+        pre: delta(preAvg, a.selfMapMean),
+        post: delta(postAvg, b.selfMapMean),
+      },
+      minutes: { pre: a.durationMin, post: b.durationMin },
     };
   }).sort((a, b) => (b.change ?? -999) - (a.change ?? -999));
+
+  const changes = people.map((p) => p.change).filter((c) => c !== null);
 
   return {
     available: true,
     preCount: preByKey.size,
     postCount: postByKey.size,
     pairedCount: paired.length,
-    onlyPre: [...preByKey.keys()].filter((k) => !postByKey.has(k)).map((k) => preByKey.get(k).name),
+    onlyPre: unmatchedPre,
+    onlyPost: unmatchedPost,
+    dimensions: byDimension.map((d) => d.dimension),
+    meanChange: mean(changes),
+    improved: changes.filter((c) => c > 0).length,
+    unchanged: changes.filter((c) => c === 0).length,
+    declined: changes.filter((c) => c < 0).length,
     byDimension,
     people,
   };

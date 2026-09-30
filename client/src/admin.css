@@ -383,3 +383,18 @@
   font: inherit; font-size: 13px; cursor: pointer; text-align: left; margin-bottom: 8px;
 }
 .rail-signout:hover { background: var(--surface); color: var(--block); border-color: var(--block); }
+
+/* ---------- pre → post comparison ----------
+   Each cell carries two numbers and the movement between them, so the table
+   is denser than the cohort one and needs its own rhythm. */
+.cmp-table th, .cmp-table td{white-space:nowrap}
+.cmp-table .cmp-cell{padding-top:10px; padding-bottom:10px}
+.cmp-name{font-weight:600}
+.cmp-mail{font-family:var(--mono); font-size:11.5px; color:var(--ink-3); margin-top:2px}
+.cmp-pair{display:block; font-variant-numeric:tabular-nums; font-size:13px}
+.cmp-arrow{opacity:.45; padding:0 1px}
+.cmp-delta{display:block; font-size:11.5px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:1px}
+.cmp-delta.up{color:var(--pass)}
+.cmp-delta.down{color:var(--block)}
+.cmp-delta.flat{color:var(--ink-3); font-weight:600}
+.cmp-none{color:var(--ink-3)}
