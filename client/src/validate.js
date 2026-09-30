@@ -13,6 +13,7 @@ import { hasContent } from "./sanitize.js";
 //   · the hands-on identifiers are excused when the "what stopped you" note
 //     is filled — a platform failure must not trap someone on a screen
 //   · a discriminator's justification box is optional
+//   · an evidence-desk part flagged part.optional
 // ---------------------------------------------------------------
 
 const filled = hasContent;
@@ -20,6 +21,11 @@ const filled = hasContent;
 /** Sub-part refs for a forensics artefact: F1 → ["F1_a", "F1_b", "F1_c"]. */
 export function subRefs(item) {
   return ((item.config || {}).subs || []).map((s) => ({ ref: `${item.ref}_${s[0]}`, part: s[0] }));
+}
+
+/** Part refs for an evidence-desk question: E1 → E1_ver, E1_run, E1_w. */
+export function partRefs(item) {
+  return ((item.config || {}).parts || []).map((p) => ({ ref: `${item.ref}_${p.key}`, part: p }));
 }
 
 export function validateScreen(screen, { answers = {}, name = "", email = "" } = {}) {
@@ -79,6 +85,15 @@ export function validateScreen(screen, { answers = {}, name = "", email = "" } =
     } else if (it.kind === "forensics") {
       for (const { ref, part } of subRefs(it)) {
         if (!filled(A(ref).value)) need(ref, `Part (${part}) needs an answer.`);
+      }
+    } else if (it.kind === "exact") {
+      for (const { ref, part } of partRefs(it)) {
+        if (part.optional || filled(A(ref).value)) continue;
+        need(ref, part.kind === "select"
+          ? "Choose one."
+          : part.kind === "why"
+            ? "This needs an answer."
+            : `“${part.label}” needs an answer — it is in the exhibits.`);
       }
     } else if (st.kind === "handson") {
       const note = (st.items || []).find((x) => x.kind === "text" && /blocked/i.test(x.ref));

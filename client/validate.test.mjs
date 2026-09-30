@@ -1,6 +1,9 @@
 import { validateScreen } from "./src/validate.js";
 
-const res = await fetch("http://localhost:3000/api/assessment/pre");
+// The API host, so the suite can run against a dev server on any port:
+//   API=http://localhost:3099 node --test client/validate.test.mjs
+const API = process.env.API || "http://localhost:3002";
+const res = await fetch(`${API}/api/assessment/pre`);
 const { assessment } = await res.json();
 const stage = (k) => assessment.stages.find((s) => s.key === k);
 
@@ -94,8 +97,85 @@ m6.items.forEach((i) => { ctxAll[i.ref] = { value: i.kind === "select" ? i.confi
 check("context all answered", validateScreen({ key: "m6", stage: m6 }, { answers: ctxAll }), []);
 
 // ---------- ident ----------
-check("ident blank name", validateScreen({ key: "ident" }, { name: "  " }), ["who_name"]);
-check("ident real name", validateScreen({ key: "ident" }, { name: "Ravi" }), []);
+// The email now comes from the signed-in session rather than being typed, so
+// every real call arrives with one; the validator still checks it, because a
+// missing email means an attempt that cannot be attributed.
+const SIGNED_IN = "rkshee@bechtel.com";
+check("ident blank name", validateScreen({ key: "ident" }, { name: "  ", email: SIGNED_IN }), ["who_name"]);
+check("ident real name", validateScreen({ key: "ident" }, { name: "Ravi", email: SIGNED_IN }), []);
+check("ident no session email", validateScreen({ key: "ident" }, { name: "Ravi" }), ["who_email"]);
+
+// =================================================================
+// POST ASSESSMENT
+// The evidence desk is the only stage whose questions answer through named
+// parts rather than one value, so it gets its own coverage.
+// =================================================================
+
+const postRes = await fetch(`${API}/api/assessment/post`);
+const post = (await postRes.json()).assessment;
+const pstage = (k) => post.stages.find((s) => s.key === k);
+
+const ev = pstage("p3");
+const evRefs = (item) => item.config.parts.map((x) => `${item.ref}_${x.key}`);
+const allEv = {};
+for (const it of ev.items) for (const r of evRefs(it)) allEv[r] = { value: "8" };
+
+check("evidence desk nothing filled -> every part",
+  validateScreen({ key: "p3", stage: ev }, { answers: {} }),
+  ev.items.flatMap(evRefs));
+check("evidence desk fully answered -> clean",
+  validateScreen({ key: "p3", stage: ev }, { answers: allEv }), []);
+
+const e3 = ev.items.find((i) => i.ref === "E3");
+const missingSelect = { ...allEv }; delete missingSelect.E3_ind;
+check("evidence desk select left at the placeholder",
+  validateScreen({ key: "p3", stage: ev }, { answers: missingSelect }), ["E3_ind"]);
+
+const blankWhy = { ...allEv }; blankWhy.E1_w = { value: "   \n  " };
+check("evidence desk whitespace-only reasoning is still blank",
+  validateScreen({ key: "p3", stage: ev }, { answers: blankWhy }), ["E1_w"]);
+
+const e6 = ev.items.find((i) => i.ref === "E6");
+check("E6 is reasoning only, no exact fields",
+  { [e6.config.parts.length === 1 && e6.config.parts[0].kind === "why" ? "" : "shape"]: 1 }, [""]);
+
+// ---- post discriminators: one per screen, some with a code artefact ----
+const pd = pstage("p2");
+const p8 = pd.items.find((i) => i.ref === "P8");
+const p8Screen = { key: "p2-7", stage: pd, item: p8, itemNo: 7 };
+check("P8 nothing chosen", validateScreen(p8Screen, { answers: {} }), ["P8"]);
+check("P8 chosen but no confidence",
+  validateScreen(p8Screen, { answers: { P8: { value: [p8.options[0].id] } } }), ["P8::conf"]);
+check("P8 chosen with confidence -> clean",
+  validateScreen(p8Screen, { answers: { P8: { value: [p8.options[0].id] }, "P8": { value: [p8.options[0].id], confidence: "High" } } }), []);
+check("P8 justification box stays optional",
+  validateScreen(p8Screen, { answers: { P8: { value: [p8.options[0].id], confidence: "Low" } } }), []);
+
+// ---- post forensics: F1 part (d) asks for written-out code ----
+const pf = pstage("p4");
+const F1 = pf.items.find((i) => i.ref === "F1");
+const f1p = { key: "p4-0", stage: pf, item: F1, itemNo: 0 };
+check("post F1 nothing filled -> all four parts",
+  validateScreen(f1p, { answers: {} }), F1.config.subs.map((x) => `F1_${x[0]}`));
+const f1All = {};
+for (const x of F1.config.subs) f1All[`F1_${x[0]}`] = { value: "answer" };
+check("post F1 fully filled -> clean", validateScreen(f1p, { answers: f1All }), []);
+delete f1All.F1_d;
+check("post F1 missing the rewrite -> only (d)", validateScreen(f1p, { answers: f1All }), ["F1_d"]);
+
+// ---- post self-map and reflection ----
+const ps = pstage("p1");
+const psAll = {};
+for (const i of ps.items.filter((x) => x.kind === "band")) psAll[i.ref] = { value: "3", confidence: "I did it myself" };
+check("post self-map complete, optional free text blank",
+  validateScreen({ key: "p1", stage: ps }, { answers: psAll }), []);
+delete psAll.sm0.confidence;
+check("post self-map row missing the programme column",
+  validateScreen({ key: "p1", stage: ps }, { answers: psAll }), ["sm0::conf"]);
+
+const pr = pstage("p6");
+check("reflection nothing answered", validateScreen({ key: "p6", stage: pr }, { answers: {} }),
+  pr.items.map((i) => i.ref));
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

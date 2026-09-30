@@ -15,8 +15,9 @@ const db = require("./db");
 const seedData = require("./seed-data");
 
 const VALID_PHASES = ["pre", "post"];
-const STAGE_KINDS = ["preflight", "selfmap", "discriminators", "forensics", "handson", "written", "context", "review"];
-const ITEM_KINDS = ["preflight", "band", "single", "multi", "forensics", "identifier", "written", "text", "select"];
+const STAGE_KINDS = ["preflight", "selfmap", "discriminators", "evidence", "forensics", "handson", "written", "context", "review"];
+const ITEM_KINDS = ["preflight", "band", "single", "multi", "exact", "forensics", "identifier", "written", "text", "select"];
+const PART_KINDS = ["short", "select", "why"];
 const CHOICE_KINDS = ["single", "multi"];
 
 // =====================================================================
@@ -91,6 +92,37 @@ function validate(assessments) {
             errors.push(`${iWhere} a select item needs config.choices with at least 2 entries`);
           }
 
+        } else if (item.kind === "exact") {
+          // An evidence-desk question is answered through its parts, each of
+          // which becomes its own response row (E1 → E1_ver, E1_run, E1_w).
+          const parts = cfg.parts;
+          if (!Array.isArray(parts) || parts.length === 0) {
+            errors.push(`${iWhere} an exact item needs config.parts`);
+          } else {
+            const seen = new Set();
+            parts.forEach((p, pi) => {
+              const pWhere = `${iWhere} part[${pi}]`;
+              if (!p.key) errors.push(`${pWhere} missing key`);
+              if (seen.has(p.key)) errors.push(`${pWhere} duplicate part key "${p.key}"`);
+              seen.add(p.key);
+              if (!PART_KINDS.includes(p.kind)) {
+                errors.push(`${pWhere} kind must be one of: ${PART_KINDS.join(", ")}`);
+              }
+              if (p.kind === "select" && (!Array.isArray(p.choices) || p.choices.length < 2)) {
+                errors.push(`${pWhere} a select part needs at least 2 choices`);
+              }
+              if (!p.label) warnings.push(`${pWhere} no label — the field is unlabelled on screen`);
+            });
+            // The answer lives in the rubric, which is reviewer-only. Without
+            // it the question cannot be marked at all.
+            const graded = parts.filter((p) => p.kind !== "why").map((p) => p.key);
+            const answers = new Set((item.rubrics || []).filter((r) => r.kind === "exact").map((r) => r.ref));
+            const missing = graded.filter((k) => !answers.has(k));
+            if (missing.length) {
+              warnings.push(`${iWhere} no expected answer recorded for: ${missing.join(", ")}`);
+            }
+          }
+
         } else if (item.kind === "forensics") {
           if (!Array.isArray(cfg.subs) || cfg.subs.length === 0) {
             errors.push(`${iWhere} a forensics item needs config.subs`);
@@ -116,6 +148,12 @@ function validate(assessments) {
       }
       if (s.kind === "selfmap" && !kinds.has("band")) {
         errors.push(`${sWhere} a selfmap stage needs at least one band item`);
+      }
+      if (s.kind === "evidence" && [...kinds].some((k) => k !== "exact")) {
+        errors.push(`${sWhere} an evidence stage may only hold exact items`);
+      }
+      if (s.kind === "evidence" && !((s.copy || {}).exhibits || []).length) {
+        errors.push(`${sWhere} an evidence stage needs copy.exhibits — the answers are read off them`);
       }
       if (s.kind === "handson" && !kinds.has("identifier")) {
         errors.push(`${sWhere} a handson stage needs at least one identifier item`);

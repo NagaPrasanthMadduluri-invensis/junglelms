@@ -277,3 +277,60 @@ textarea[aria-invalid="true"], input[aria-invalid="true"], select[aria-invalid="
 .field-note{
   font-family:var(--mono); font-size:12.5px; color:var(--ink-3); margin-top:7px;
 }
+
+/* ---------- evidence desk ----------
+   Six exhibits, collapsible: all six open at once is unreadable, and most
+   questions are answered from the first two. */
+.exhibit{
+  border:1px solid var(--line); border-radius:4px; background:var(--surface);
+  margin:0 0 12px; overflow:hidden;
+}
+.exhibit > summary{
+  cursor:pointer; padding:14px 18px; display:flex; gap:12px; align-items:baseline;
+  flex-wrap:wrap; background:#F7F9FA; border-bottom:1px solid transparent;
+}
+.exhibit[open] > summary{border-bottom-color:var(--line)}
+.exhibit > summary:hover{background:#EFF3F5}
+.exhibit .xid{
+  font-family:var(--mono); font-size:11.5px; letter-spacing:.08em; color:#fff;
+  background:var(--rail); border-radius:2px; padding:3px 7px; flex:none;
+}
+.exhibit .xt{font-size:16px; font-weight:600}
+.exhibit .xc{font-family:var(--mono); font-size:12px; color:var(--ink-3); margin-left:auto}
+.exhibit .artefact{margin:0; border-radius:0}
+.scroll{overflow-x:auto}
+
+.xtab{width:100%; border-collapse:collapse; font-size:14px; font-family:var(--mono)}
+.xtab th{
+  text-align:left; padding:11px 14px; font-size:11px; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--ink-3); border-bottom:1px solid var(--line);
+  white-space:nowrap; font-weight:600;
+}
+.xtab td{padding:11px 14px; border-bottom:1px solid #EDF1F3; vertical-align:top}
+.xtab tr:last-child td{border-bottom:0}
+.xtab tbody tr:hover{background:#F7F9FA}
+
+/* One question on the desk: short exact fields, then the reasoning. */
+.eq{border-top:1px solid var(--line); padding:24px 0}
+.eq:first-child{border-top:0; padding-top:0}
+.eq:last-child{padding-bottom:0}
+.eq .pair{display:flex; gap:18px; flex-wrap:wrap; margin:0 0 18px}
+.eq .pair > div{flex:1; min-width:240px}
+.eq .pair select{
+  width:100%; font:inherit; font-size:16.5px; padding:13px 15px;
+  border:1px solid var(--line); border-radius:3px; background:var(--surface);
+}
+.eq .field{margin-bottom:0}
+
+/* A sub-part that asks for the fix to be written out, not bulleted. */
+.fixnote{
+  font-size:13.5px; color:var(--ink-2); background:var(--rail-soft);
+  border-left:3px solid var(--rail); padding:9px 13px; margin:0 0 10px; border-radius:0 3px 3px 0;
+}
+textarea.mono{font-family:var(--mono); font-size:14px; line-height:1.6}
+
+/* Forensics evidence: prose in both columns, so not the right-aligned
+   monospace treatment the review list uses. */
+.evid{width:100%; border-collapse:collapse; font-size:16px}
+.evid td{padding:14px 18px; border-bottom:1px solid #E7ECEF; vertical-align:top}
+.evid tr:last-child td{border-bottom:0}

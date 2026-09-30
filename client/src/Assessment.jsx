@@ -64,20 +64,57 @@ function buildScreens(assessment) {
  * render, so React treated each keystroke as a new component type and
  * unmounted/remounted the <textarea> — losing focus after one character.
  */
-function TextArea({ value, rows = 4, placeholder = "", onChange, invalid = false }) {
+function TextArea({ value, rows = 4, placeholder = "", onChange, invalid = false, mono = false }) {
   const v = typeof value === "string" ? value : "";
   const n = words(v);
   return (
     <>
       <textarea
+        className={mono ? "mono" : undefined}
         rows={rows}
         placeholder={placeholder}
         value={v}
         aria-invalid={invalid || undefined}
         onChange={(e) => onChange(e.target.value)}
+        spellCheck={mono ? false : undefined}
       />
       <div className="count">{n} {n === 1 ? "word" : "words"}</div>
     </>
+  );
+}
+
+/**
+ * One exhibit on the evidence desk: a table, or a code listing. Collapsible,
+ * because six of them open at once is unreadable, and the first two are the
+ * ones most questions start from.
+ *
+ * Module scope, for the same reason TextArea is — see above.
+ */
+function Exhibit({ x, open }) {
+  return (
+    <details className="exhibit" open={open}>
+      <summary>
+        <span className="xid">{x.id}</span>
+        <span className="xt">{x.title}</span>
+        <span className="xc">{x.cap}</span>
+      </summary>
+      {x.code ? (
+        <div className="artefact"><pre>{x.code}</pre></div>
+      ) : (
+        <div className="scroll">
+          <table className="xtab">
+            <thead>
+              <tr>{(x.head || []).map((h) => <th key={h}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {(x.rows || []).map((r, ri) => (
+                <tr key={ri}>{r.map((c, ci) => <td key={ci}>{c}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -325,6 +362,12 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
       } else if (s.kind === "discriminators") {
         const done = items.filter((i) => (A(i.ref).value || []).length > 0).length;
         rows.push({ label: s.name, detail: `${done} of ${items.length} answered`, complete: done === items.length });
+      } else if (s.kind === "evidence") {
+        const done = items.filter((item) => {
+          const parts = (item.config && item.config.parts) || [];
+          return parts.every((p) => filled(A(`${item.ref}_${p.key}`).value));
+        }).length;
+        rows.push({ label: s.name, detail: `${done} of ${items.length} answered`, complete: done === items.length });
       } else if (s.kind === "forensics") {
         for (const item of items) {
           const subs = (item.config && item.config.subs) || [];
@@ -429,6 +472,10 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
           ((item.config && item.config.subs) || []).forEach((sub) =>
             add(`${tag}.${item.ref}(${sub[0]})`, A(`${item.ref}_${sub[0]}`).value)
           );
+        } else if (item.kind === "exact") {
+          ((item.config && item.config.parts) || []).forEach((p) =>
+            add(`${tag}.${item.ref}.${p.key}`, A(`${item.ref}_${p.key}`).value)
+          );
         } else {
           add(`${tag}.${item.ref}`, a.value, a.confidence || "");
         }
@@ -532,6 +579,7 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
         <p className="eyebrow">{stageLabel(s)}</p>
         <h1>{s.copy.h1 || s.name}</h1>
         {s.copy.lead && <p className="lead">{s.copy.lead}</p>}
+        {s.copy.body && <p>{s.copy.body}</p>}
         {anchors.length > 0 && (
           <div className="anchors">
             {anchors.map((a) => (
@@ -545,7 +593,7 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
               <tr>
                 <th>I can…</th>
                 {[0, 1, 2, 3, 4].map((n) => <th key={n}>{n}</th>)}
-                <th>Sure?</th>
+                <th>{s.copy.confHead || "Sure?"}</th>
               </tr>
             </thead>
             <tbody>
@@ -626,6 +674,12 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
             <span className="qid">{item.ref}</span>
             <p className="stem">{item.stem}</p>
           </div>
+          {item.config && item.config.code && (
+            <div className="artefact">
+              {item.config.codeCap && <div className="cap">{item.config.codeCap}</div>}
+              <pre>{item.config.code}</pre>
+            </div>
+          )}
           {item.kind === "multi" && s.copy.multiHint && <p className="hint">{s.copy.multiHint}</p>}
           <div className="opts">
             {order.map((oi) => {
@@ -672,7 +726,8 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
       <>
         <p className="eyebrow">{stageLabel(s)} · artefact {n + 1} of {s.items.length}</p>
         <h1>{item.stem}</h1>
-        {s.copy.lead && <p className="lead">{s.copy.lead}</p>}
+        {item.config.lead && <p className="lead">{item.config.lead}</p>}
+        {s.copy.lead && <p className={item.config.lead ? "" : "lead"}>{s.copy.lead}</p>}
 
         {item.config.code ? (
           <>
@@ -689,7 +744,7 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
               <p style={{ marginBottom: 0 }}>{item.config.narrative}</p>
             </div>
             <div className="card flush">
-              <table className="rev">
+              <table className="evid">
                 <tbody>
                   {(item.config.evidence || []).map((e) => (
                     <tr key={e[0]}>
@@ -707,15 +762,100 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
         {(item.config.subs || []).map((sub) => (
           <div className="field" key={sub[0]}>
             <label>({sub[0]}) {sub[1]}</label>
+            {sub[2] === "code" && (
+              <p className="fixnote">Write it out. Bullet points will not score here.</p>
+            )}
             <TextArea
               value={A(`${item.ref}_${sub[0]}`).value}
-              rows={sub[0] === "a" ? 5 : 3}
+              rows={sub[2] === "code" ? 8 : sub[0] === "a" ? 5 : 3}
+              mono={sub[2] === "code"}
               invalid={!!err(`${item.ref}_${sub[0]}`)}
               onChange={(v) => put(`${item.ref}_${sub[0]}`, { value: v })}
             />
             {err(`${item.ref}_${sub[0]}`) && <div className="field-err" data-err>{err(`${item.ref}_${sub[0]}`)}</div>}
           </div>
         ))}
+      </>
+    );
+  }
+
+  function StageEvidence(s) {
+    const exhibits = s.copy.exhibits || [];
+    return (
+      <>
+        <p className="eyebrow">
+          {stageLabel(s)}{s.copy.eyebrow ? ` · ${s.copy.eyebrow}` : ""}
+        </p>
+        <h1>{s.copy.h1 || s.name}</h1>
+        {s.copy.lead && <p className="lead">{s.copy.lead}</p>}
+        {s.copy.body && <p>{s.copy.body}</p>}
+
+        {/* The first two are open on arrival; the rest are one click away. */}
+        {exhibits.map((x, i) => <Exhibit key={x.id} x={x} open={i < 2} />)}
+
+        <div className="card" style={{ marginTop: 22 }}>
+          {s.items.map((item) => {
+            const parts = (item.config && item.config.parts) || [];
+            const short = parts.filter((p) => p.kind !== "why");
+            const why = parts.find((p) => p.kind === "why");
+            return (
+              <div className="eq" key={item.ref}>
+                <p className="qlabel">
+                  <span className="qid">{item.ref}</span> {item.stem}
+                </p>
+
+                {short.length > 0 && (
+                  <div className="pair">
+                    {short.map((p) => {
+                      const ref = `${item.ref}_${p.key}`;
+                      return (
+                        <div key={p.key}>
+                          <p className="sub">{p.label}</p>
+                          {p.kind === "select" ? (
+                            <select
+                              value={A(ref).value || ""}
+                              aria-label={p.label}
+                              aria-invalid={err(ref) ? true : undefined}
+                              onChange={(e) => put(ref, { value: e.target.value })}
+                            >
+                              <option value="">–</option>
+                              {(p.choices || []).map((c) => <option key={c}>{c}</option>)}
+                            </select>
+                          ) : (
+                            <input
+                              type="text"
+                              value={A(ref).value || ""}
+                              aria-label={p.label}
+                              aria-invalid={err(ref) ? true : undefined}
+                              placeholder={p.hint || ""}
+                              onChange={(e) => put(ref, { value: e.target.value })}
+                            />
+                          )}
+                          {err(ref) && <div className="field-err" data-err>{err(ref)}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {why && (
+                  <div className="field">
+                    <label className="sub">{why.label}</label>
+                    <TextArea
+                      value={A(`${item.ref}_${why.key}`).value}
+                      rows={why.rows || 2}
+                      invalid={!!err(`${item.ref}_${why.key}`)}
+                      onChange={(v) => put(`${item.ref}_${why.key}`, { value: v })}
+                    />
+                    {err(`${item.ref}_${why.key}`) && (
+                      <div className="field-err" data-err>{err(`${item.ref}_${why.key}`)}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </>
     );
   }
@@ -884,6 +1024,12 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
             {c.readThis.map((p, i) => (
               <p key={i} style={i === c.readThis.length - 1 ? { marginBottom: 0 } : undefined}>{p}</p>
             ))}
+          </div>
+        )}
+        {c.warnBody && (
+          <div className="note warn">
+            <strong>{c.warnTitle || "Before you start"}</strong>
+            <p style={{ marginBottom: 0 }}>{c.warnBody}</p>
           </div>
         )}
         <h2>What you will be asked to do</h2>
@@ -1083,6 +1229,7 @@ export default function Assessment({ participant, admin, onAdminSignedIn, onOpen
   }
   else if (stage.kind === "preflight") body = StagePreflight(stage);
   else if (stage.kind === "selfmap") body = StageSelfmap(stage);
+  else if (stage.kind === "evidence") body = StageEvidence(stage);
   else if (stage.kind === "handson") body = StageHandson(stage);
   else if (stage.kind === "written") body = StageWritten(stage);
   else if (stage.kind === "context") body = StageContext(stage);

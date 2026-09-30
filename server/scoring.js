@@ -131,6 +131,14 @@ function checkCompleteness(assessment, answers = {}, meta = {}) {
       }).length;
       push(stage.name, `${done} of ${items.length} answered`, done === items.length);
 
+    } else if (stage.kind === "evidence") {
+      // Answered through parts: every field, select and reasoning box.
+      const done = items.filter((item) => {
+        const parts = (item.config && item.config.parts) || [];
+        return parts.every((p) => isFilled(answers[`${item.ref}_${p.key}`] && answers[`${item.ref}_${p.key}`].value));
+      }).length;
+      push(stage.name, `${done} of ${items.length} answered`, done === items.length);
+
     } else if (stage.kind === "forensics") {
       for (const item of items) {
         const subs = (item.config && item.config.subs) || [];

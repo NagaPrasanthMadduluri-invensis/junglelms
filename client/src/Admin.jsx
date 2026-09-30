@@ -14,6 +14,10 @@ import "./admin.css";
 
 const PHASE_LABEL = { pre: "Pre-assessment", post: "Post-assessment" };
 
+/** [a,b,c,d] → [[a,b],[c,d]] — the distribution cards sit two to a row. */
+const chunk = (xs, n) =>
+  xs.reduce((out, x, i) => (i % n ? out[out.length - 1].push(x) : out.push([x]), out), []);
+
 const fmtDate = (ms) =>
   ms ? new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
 
@@ -600,20 +604,15 @@ export default function Admin({ admin, onExit, onSignedOut }) {
                 <Cards stats={data.stats} assessment={data.assessment} />
                 <Dimensions dimensionMeans={data.stats.dimensionMeans} />
                 <Participants participants={data.participants} onOpen={(p) => setOpenId(p.id)} />
-                <div className="admin-two-up">
-                  <Distribution title="AI assistant use"
-                    note="Self-declared, not enforced. Read-calibration only."
-                    data={data.stats.aiAssistance} />
-                  <Distribution title="LLM work on their roadmap"
-                    note="Decides whether Day 3 covers operating models or extends to LLM workloads."
-                    data={data.stats.llmDemand} />
-                </div>
-                <div className="admin-two-up">
-                  <Distribution title="Background" data={data.stats.background} />
-                  <Distribution title="Pre-work hours they can protect"
-                    note="Caps how much pre-work each person is sent."
-                    data={data.stats.prepHours} />
-                </div>
+                {/* The pre and post instruments ask different context
+                    questions, so the server names these per phase. */}
+                {chunk(data.stats.distributions || [], 2).map((pair, i) => (
+                  <div className="admin-two-up" key={i}>
+                    {pair.map((d) => (
+                      <Distribution key={d.title} title={d.title} note={d.note} data={d.data} />
+                    ))}
+                  </div>
+                ))}
                 {data.stats.calibration.length > 0 && (
                   <div className="admin-panel">
                     <h2>Calibration index</h2>

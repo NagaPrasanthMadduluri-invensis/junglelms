@@ -297,7 +297,11 @@ app.post("/api/attempts", auth.participantOnly, async (req, res, next) => {
     const scoreByRef = new Map(itemScores.map((s) => [s.ref, s.score]));
 
     // Keep only answers that correspond to a real item, so a client cannot
-    // write arbitrary rows. Forensics sub-parts key as "F1_a".
+    // write arbitrary rows.
+    //
+    // Two kinds answer through named parts rather than one value, and BOTH
+    // have to be listed here or their answers are dropped without a word:
+    // forensics sub-parts key as "F1_a", evidence-desk parts as "E1_ver".
     const knownRefs = new Set();
     for (const stage of assessment.stages) {
       for (const item of stage.items) {
@@ -305,7 +309,18 @@ app.post("/api/attempts", auth.participantOnly, async (req, res, next) => {
         for (const sub of (item.config && item.config.subs) || []) {
           knownRefs.add(`${item.ref}_${sub[0]}`);
         }
+        for (const part of (item.config && item.config.parts) || []) {
+          knownRefs.add(`${item.ref}_${part.key}`);
+        }
       }
+    }
+
+    // A submitted answer that matches no item is silently discarded above, so
+    // a content change that renames a ref would lose answers without anyone
+    // noticing. Say so in the log rather than only in the data.
+    const dropped = Object.keys(answers).filter((ref) => !knownRefs.has(ref));
+    if (dropped.length) {
+      console.warn(`[attempts] ${phase}: dropped ${dropped.length} unknown answer ref(s): ${dropped.join(", ")}`);
     }
 
     const responses = Object.entries(answers)

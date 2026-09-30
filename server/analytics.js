@@ -51,11 +51,15 @@ function flattenItems(assessment) {
       const optional = !!(item.config && item.config.optional);
       const isBlockerNote = stage.kind === "handson" && item.kind === "text" && /blocked/i.test(item.ref);
 
+      // Forensics sub-parts and evidence-desk parts each answer separately,
+      // so they count as their own answerable units rather than one item.
       const subs = (item.config && item.config.subs) || [];
-      if (subs.length) {
-        for (const s of subs) {
-          answerable.push(`${item.ref}_${s[0]}`);
-          if (!optional) required.push(`${item.ref}_${s[0]}`);
+      const parts = (item.config && item.config.parts) || [];
+      if (subs.length || parts.length) {
+        const keys = subs.length ? subs.map((s) => s[0]) : parts.map((p) => p.key);
+        for (const k of keys) {
+          answerable.push(`${item.ref}_${k}`);
+          if (!optional) required.push(`${item.ref}_${k}`);
         }
       } else {
         answerable.push(item.ref);
@@ -66,6 +70,32 @@ function flattenItems(assessment) {
   return { items, answerable, required };
 }
 
+// =====================================================================
+// CONTEXT DISTRIBUTIONS
+//
+// The four cards under the participant table are fed by the not-scored
+// stage at the end of each instrument. The two instruments ask different
+// questions there — the pre asks what to prepare for, the post asks what
+// happened since — so the cards are named per phase rather than assumed.
+// =====================================================================
+
+const DISTRIBUTIONS = {
+  pre: [
+    { ref: "C7", title: "AI assistant use", note: "Self-declared, not enforced. Read-calibration only." },
+    { ref: "C3", title: "LLM work on their roadmap", note: "Decides whether Day 3 covers operating models or extends to LLM workloads." },
+    { ref: "C2", title: "Background", note: "The last six months of work. Used for pairing on complementary axes." },
+    { ref: "C5", title: "Pre-work hours they can protect", note: "Caps how much pre-work each person is sent." },
+  ],
+  post: [
+    { ref: "R8", title: "AI assistant use", note: "Self-declared, not enforced. Participants were asked not to use one on the evidence desk, the forensics or the written stages." },
+    { ref: "R1", title: "How far they took it", note: "The furthest each person has taken the material since the programme. The headline number for the client conversation." },
+    { ref: "R4", title: "The revisit path", note: "Whether it reached people, and whether they used it." },
+    { ref: "R5", title: "Keyboard time in the paired labs", note: "Cross-read with the “In the programme” column on the self-map." },
+  ],
+};
+
+const distributionDefs = (phase) => DISTRIBUTIONS[phase] || [];
+
 /**
  * One row per person, whether they submitted or are still part-way through.
  * In-progress sittings come from the session blobs, which carry the name the
@@ -73,6 +103,7 @@ function flattenItems(assessment) {
  */
 function buildParticipants(assessment, attempts, responsesByAttempt, sessions, rosterEmails = null) {
   const { items, answerable, required } = flattenItems(assessment);
+  const phaseDefs = distributionDefs(assessment.phase);
   const totalAnswerable = answerable.length;
   const itemByRef = new Map(items.map((i) => [i.ref, i]));
 
@@ -123,10 +154,8 @@ function buildParticipants(assessment, attempts, responsesByAttempt, sessions, r
       })),
       dimensions: a.dimensions || [],
       selfMapMean: selfMapMean(responses),
-      usedAI: pick(responses, "C7"),
-      llmDemand: pick(responses, "C3"),
-      background: pick(responses, "C2"),
-      prepHours: pick(responses, "C5"),
+      usedAI: pick(responses, phaseDefs[0] ? phaseDefs[0].ref : ""),
+      context: Object.fromEntries(phaseDefs.map((d) => [d.ref, pick(responses, d.ref)])),
     });
   }
 
@@ -171,7 +200,7 @@ function buildParticipants(assessment, attempts, responsesByAttempt, sessions, r
       blockedItems: [],
       dimensions: [],
       selfMapMean: null,
-      usedAI: "", llmDemand: "", background: "", prepHours: "",
+      usedAI: "", context: {},
     });
   }
 
@@ -212,6 +241,7 @@ function tally(rows, field) {
 
 /** The headline cards. */
 function buildStats(assessment, participants) {
+  const phase = assessment.phase;
   const submitted = participants.filter((p) => p.state !== "in_progress");
   const complete = participants.filter((p) => p.state === "complete");
   const partial = participants.filter((p) => p.state === "partial");
@@ -267,10 +297,11 @@ function buildStats(assessment, participants) {
       : null,
     blockedPeople: blockers.length,
     blockedTotal: participants.reduce((a, p) => a + p.blockedCount, 0),
-    aiAssistance: tally(submitted, "usedAI"),
-    llmDemand: tally(submitted, "llmDemand"),
-    background: tally(submitted, "background"),
-    prepHours: tally(submitted, "prepHours"),
+    distributions: distributionDefs(phase).map((d) => ({
+      title: d.title,
+      note: d.note,
+      data: tally(submitted.map((p) => ({ v: (p.context || {})[d.ref] || "" })), "v"),
+    })),
     lastActivity: participants.reduce(
       (max, p) => Math.max(max, p.completedAt || p.lastSeenAt || 0), 0
     ) || null,
@@ -282,8 +313,14 @@ function buildStats(assessment, participants) {
  * Returns null until both phases have submitted attempts.
  */
 function buildComparison(preRows, postRows) {
-  const preByKey = new Map(preRows.filter((p) => p.state !== "in_progress").map((p) => [p.key, p]));
-  const postByKey = new Map(postRows.filter((p) => p.state !== "in_progress").map((p) => [p.key, p]));
+  // Pair on the signed-in email, not the typed name. Both sittings are behind
+  // the same roster login, so the address is identical by construction, while
+  // a name is whatever the person typed that day — "Aryan Gurjar Banke" one
+  // week and "Aryan Banke" the next would silently fail to pair. The name key
+  // is kept as a fallback for any attempt recorded without an address.
+  const pairKey = (p) => (p.email || "").trim().toLowerCase() || p.key;
+  const preByKey = new Map(preRows.filter((p) => p.state !== "in_progress").map((p) => [pairKey(p), p]));
+  const postByKey = new Map(postRows.filter((p) => p.state !== "in_progress").map((p) => [pairKey(p), p]));
   const paired = [...postByKey.keys()].filter((k) => preByKey.has(k));
 
   if (!paired.length) {
